@@ -669,7 +669,53 @@ the listening test.
 - Rate now: 2 glitch events in ~65 min of play under load, against several per minute in the
   storm days. Much better, not gone.
 
+### Trap caught it: GPU timeout, then Windows freezes every CPU for a live dump (2026-11-13 6:43 PM PST)
+
+The user heard "a handful of glitches" that lined up with clicking around the T3 Code UI
+(animations, heavy redraws). The passive trap fired on Jarlid's
+`late callback ... 1433.7 ms after the one before` at **6:43:25.775 PM PST**. A second followed
+at 6:43:37.956 PM with **3355.2 ms**. Neither counted an underrun, so it was a real dropout
+measured as a gap.
+
+- **Trace (`trap.etl`, 6:40:50–6:43:31 PM PST, symbols resolved):** CPUs 1–11 all ran
+  `ntoskrnl.exe!IopLiveDumpCorralDpc` for **1,431 ms**, all ending at the same instant (CPU 0
+  was the initiator). That is Windows corralling every processor to take a **live kernel
+  dump**. The gap matches Jarlid's 1,433.7 ms to the millisecond.
+- **Kernel-LiveDump/Operational log:** the second capture at 6:43:34–37 PM PST reports
+  `SystemQuiescedDuration: 3349ms`, matching Jarlid's 3,355 ms. Then it wrote **22 GB** to disk
+  (`DumpWriteDuration: 62439ms`). Bugcheck code 321 = 0x141.
+- **What triggered it (Application log, WER 1001):**
+  `LKD_0x141_Tdr:C_IMAGE_igdkmd64.sys_GEN9CFL_DX10_PAGEFAULT`. That's a GPU page fault in the
+  Intel UHD 630 driver (`igdkmd64.sys` 31.0.101.2145, dated 2026-09-01), which Windows handles
+  as a timeout-and-recover (TDR). The same iGPU drives the Dell **and** hosts Intel Display
+  Audio, so a GPU reset hits the audio endpoint directly as well.
+- **How often:** 0x141 reports on 19 of the last 30 days, 1–4 a day (40 total). The 3 s
+  full-memory dumps (15–24 GB each) run about weekly (12 since 2026-07-07; Windows throttles
+  them, `CrashControl\FullLiveKernelReports\LastFullLiveReport` = 6:44:40 PM today).
+- Why full dumps: `AllowTelemetry = 3` (optional diagnostic data) with
+  `ChangeDumpTypeByTelemetryLevel = 1`. Read only; nothing changed.
+- Not Jarlid's autosync: the speech engine wasn't running at 6:43 PM.
+- The WER reports in `C:\ProgramData\Microsoft\Windows\WER\ReportArchive\Kernel_141_*`
+  hold no process name (parameters are redacted `aaaa…`).
+- Possibly relevant: a Fresco Logic IDDCX (FL2000 USB display) adapter is also present. Cross-
+  adapter copies from the iGPU to an indirect display are a plausible source of a DX10 page
+  fault. Not tested.
+
+**So there are two different glitches:**
+1. **Dropouts of 1.4–3.4 s** from the GPU TDR and its live dump. Rare (a few a day), triggered
+   by GPU work such as UI animations. Not related to network or CPU load.
+2. **Scratches of 22–44 ms** from long vmswitch DPCs on CPU 0. Made much worse by the gateway's
+   mDNS storm (now stopped), and stretched by build load.
+
 ### Open questions for the user
+
+4. **GPU timeouts (new, 2026-11-13).** Options, in order of preference:
+   a. Find what triggers the page fault: try T3 Code with hardware acceleration off, or the
+      FL2000 display unplugged, and watch for new `LKD_0x141` reports.
+   b. Check Intel for a newer Gen9 legacy driver than 31.0.101.2145.
+   c. Make the dumps cheaper, which shortens the freeze but not the GPU reset: lower
+      diagnostic data to Required, or the live-dump settings. These are Windows system settings,
+      so the user applies them.
 
 1. *(Moot: the loop stopped. The user allowed only a temporary test, never a permanent rule.)*
    Block this PC's answers (firewall rule: inbound UDP 5353 from 192.168.1.254 on
