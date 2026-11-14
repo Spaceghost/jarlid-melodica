@@ -701,6 +701,12 @@ measured as a gap.
   adapter copies from the iGPU to an indirect display are a plausible source of a DX10 page
   fault. Not tested.
 
+**FL2000 history (2026-11-13 ~7:00 PM PST):** the user confirms the USB display is in use.
+Fresco Logic FL2000 (`USB\VID_1D5C&PID_2000`, IDDCX driver 2.1.36287.0, dated 2020-07-27)
+was first installed 2024-12-19; last plugged in 2026-11-11 7:50 PM PST. The Kernel-LiveDump
+log (back to 2025-01-09) shows 0x141 GPU dumps every month since 2025-01, so there's no
+"before the FL2000" baseline to compare against. History can't settle it; it needs a test.
+
 **So there are two different glitches:**
 1. **Dropouts of 1.4–3.4 s** from the GPU TDR and its live dump. Rare (a few a day), triggered
    by GPU work such as UI animations. Not related to network or CPU load.
