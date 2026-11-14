@@ -707,6 +707,16 @@ was first installed 2024-12-19; last plugged in 2026-11-11 7:50 PM PST. The Kern
 log (back to 2025-01-09) shows 0x141 GPU dumps every month since 2025-01, so there's no
 "before the FL2000" baseline to compare against. History can't settle it; it needs a test.
 
+**Screen layout (2026-11-13 ~7:10 PM PST):** the user keeps the third monitor (no unplug test).
+`DISPLAY1` = Dell P2715Q 4K (Intel, DisplayPort): T3 Code, Slack, Discord, Terminal.
+`DISPLAY2` = Dell E2414H portrait, right (Intel, DVI): Chrome. `DISPLAY4` = Dell E2414H
+portrait, left, on the **FL2000 (USB to VGA, indirect display)**: **Jarlid** and **VLC "Entry
+Camera"** (a live camera stream, so it presents video frames continuously through the
+cross-adapter iGPU-to-IDD path). The T3 clicks happen on the Intel 4K screen, but any GPU client
+can trip a page fault, and the always-moving VLC on the indirect display is the most suspicious.
+Proposed test that keeps all three screens: swap VLC onto `DISPLAY2` (and Chrome onto the USB
+screen) for ~3 days, then count `LKD_0x141` reports (baseline: 19 of 30 days, 1–4 a day).
+
 **So there are two different glitches:**
 1. **Dropouts of 1.4–3.4 s** from the GPU TDR and its live dump. Rare (a few a day), triggered
    by GPU work such as UI animations. Not related to network or CPU load.
