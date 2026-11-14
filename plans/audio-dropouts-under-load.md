@@ -717,6 +717,13 @@ can trip a page fault, and the always-moving VLC on the indirect display is the 
 Proposed test that keeps all three screens: swap VLC onto `DISPLAY2` (and Chrome onto the USB
 screen) for ~3 days, then count `LKD_0x141` reports (baseline: 19 of 30 days, 1–4 a day).
 
+**Swap test started (2026-11-13 ~6:59 PM PST):** the user moved VLC (camera) off the USB
+screen. Jarlid stays on the USB screen for this round, so only one thing changes. If crashes stop,
+VLC was the trigger. If they don't, move Jarlid next: its window animates constantly while
+playing (word-by-word lyric highlighting). Last `LKD_0x141` before the test: 2026-11-13
+6:45:14 PM PST. Check on or after 2026-11-16 by counting WER 1001 events matching `LKD_0x141`
+since the start.
+
 **So there are two different glitches:**
 1. **Dropouts of 1.4–3.4 s** from the GPU TDR and its live dump. Rare (a few a day), triggered
    by GPU work such as UI animations. Not related to network or CPU load.
