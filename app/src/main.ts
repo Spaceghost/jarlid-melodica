@@ -473,10 +473,18 @@ for (const ev of ["wheel", "touchstart", "pointerdown"] as const) {
 
 /// Where the song is, by whichever source is on screen: the local playhead or the speaker's.
 let lyricsPosition = 0;
+/// When `lyricsPosition` was last reported, and whether that source is playing, so the word
+/// follow can carry it forward between reports. Kept beside the position rather than read off
+/// the local playhead: on a network speaker the local player sits idle, and words timed against
+/// it would never light.
+let lyricsAt = performance.now();
+let lyricsPlaying = false;
 
 /// One entry point for the playhead: synced lyrics light a line, plain ones drift.
-function followLyrics(position: number, duration: number) {
+function followLyrics(position: number, duration: number, playing: boolean) {
   lyricsPosition = position;
+  lyricsAt = performance.now();
+  lyricsPlaying = playing;
   if (syncedLines) highlightLine(position);
   else followPlainLyrics(position, duration);
 }
@@ -490,7 +498,6 @@ let syncOffset = 0;
 // times a second, too coarse for words, so between them the position is carried forward by
 // the clock, every frame, while the line has words to light.
 
-let playheadAt = performance.now();
 let wordFrame = 0;
 
 function startWordFollow() {
@@ -502,8 +509,8 @@ function followWords() {
   const line = activeLineIdx >= 0 ? paneLines[activeLineIdx] : undefined;
   if (!paneLines.some((l) => l.wordTimes)) return;
   if (line?.wordTimes && !lyricEditor.isEditing()) {
-    const ahead = lastPlayhead.paused ? 0 : Math.min(0.5, (performance.now() - playheadAt) / 1000);
-    const p = lastPlayhead.position + ahead + syncOffset;
+    const ahead = lyricsPlaying ? Math.min(0.5, (performance.now() - lyricsAt) / 1000) : 0;
+    const p = lyricsPosition + ahead + syncOffset;
     const row = lyricsEl.querySelector(`:scope > .line[data-idx="${activeLineIdx}"]`);
     row?.querySelectorAll<HTMLElement>(".w").forEach((w, k) => {
       w.classList.toggle("sung", line.wordTimes![k] <= p + 0.05);
@@ -1328,7 +1335,7 @@ function paintLyrics(res: Lyrics, note: string) {
     if (wordTimes?.some(Boolean)) startWordFollow();
     lyricsStatus.textContent = res.draft ? draftStatus(res) : `Synced lyrics${note}`;
     activeLineIdx = NO_LINE;
-    highlightLine(lastPlayhead.position);
+    highlightLine(lyricsPosition);
   } else if (res.plain) {
     syncedLines = null;
     const split = splitSections(res.plain.split(/\r?\n/));
@@ -1633,7 +1640,6 @@ let lastMoveAt = 0;
 function onPlayhead(ph: Playhead) {
   const wasPaused = lastPlayhead.paused;
   lastPlayhead = ph;
-  playheadAt = performance.now();
   // A staged update says "after this song" or "while paused" depending on this, so the
   // badge has to follow it.
   if (wasPaused !== ph.paused && status.armed) renderVersion();
@@ -1655,7 +1661,7 @@ function onPlayhead(ph: Playhead) {
   } else if (now - lastMoveAt > 1600 && now >= optimisticUntil) {
     setPlayingIcon(false);
   }
-  followLyrics(ph.position, ph.duration);
+  followLyrics(ph.position, ph.duration, !ph.paused);
 }
 
 // ---- controls ----------------------------------------------------------
@@ -2489,7 +2495,7 @@ function nudgeSync(delta: number) {
   syncOffset = Math.round((syncOffset + delta) * 100) / 100;
   localStorage.setItem(`syncoff:${currentKey}`, String(syncOffset));
   activeLineIdx = NO_LINE; // force re-highlight
-  highlightLine(lastPlayhead.position);
+  highlightLine(lyricsPosition);
   flashStatus(
     syncOffset === 0
       ? "Synced lyrics · offset cleared"
@@ -2887,7 +2893,7 @@ setInterval(() => {
   tCur.textContent = fmt(pos);
   tDur.textContent = fmt(remote.duration);
   if (Date.now() >= optimisticUntil) setPlayingIcon(remote.playing);
-  followLyrics(pos, remote.duration);
+  followLyrics(pos, remote.duration, remote.playing);
 }, 400);
 
 // ---- events from the engine bridge ------------------------------------
