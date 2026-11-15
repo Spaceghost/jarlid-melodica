@@ -2840,6 +2840,18 @@ input[type="time"]::-webkit-calendar-picker-indicator:hover {
   mask-image: none;
   /* The narrow layout centres the pane, which would centre the row grids too. */
   text-align: left;
+  /* The whole list is one text being edited (lyric-editor.ts); the caret and the
+     selected row say where, so the list needs no ring of its own. */
+  outline: none;
+  caret-color: var(--accent);
+}
+/* Row controls sit inside the text but aren't part of it: a selection runs over
+   the words only. */
+#lyrics.editing .ln-time,
+#lyrics.editing .ln-check,
+#lyrics.editing .ln-ok {
+  user-select: none;
+  -webkit-user-select: none;
 }
 #lyrics.editing .line {
   display: grid;
@@ -2889,8 +2901,7 @@ input[type="time"]::-webkit-calendar-picker-indicator:hover {
   cursor: text;
   white-space: pre-wrap;
 }
-.ln-text:focus {
-  background: rgba(var(--wash), 0.1);
+#lyrics.editing:focus .line.selected .ln-text {
   color: var(--fg);
 }
 
@@ -3066,6 +3077,10 @@ input[type="time"]::-webkit-calendar-picker-indicator:hover {
 }
 .lyric-check input {
   accent-color: var(--accent);
+}
+.lyric-check.off {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* The pencil stays lit while edit mode is on, so the pane never looks editable

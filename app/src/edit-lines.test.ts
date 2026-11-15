@@ -7,6 +7,11 @@ import {
   mergeTiming,
   stampStart,
   joinLine,
+  joinDown,
+  deleteRange,
+  editText,
+  insertLines,
+  sliceLines,
   retext,
   reviewState,
   setEnd,
@@ -125,11 +130,15 @@ describe("word timings", () => {
     expect(lines[0].words).toEqual([10, 10.4, 10.7, 11, 13, 13.5, 13.9]);
   });
 
-  test("a spelling fix keeps them; a different number of words drops them", () => {
+  test("a spelling fix keeps them; other edits keep the times of the words they didn't touch", () => {
     const lines = timed();
     retext(lines[0], "I took a wlak");
-    expect(lines[0].words).toHaveLength(4);
-    retext(lines[0], "I took a long walk");
+    expect(lines[0].words).toEqual([10, 10.4, 10.7, 11]);
+    retext(lines[0], "I took a long wlak");
+    expect(lines[0].words).toEqual([10, 10.4, 10.7, null, 11]);
+    retext(lines[0], "I tooka long wlak");
+    expect(lines[0].words).toEqual([10, null, null, 11]);
+    retext(lines[0], "everything new");
     expect(lines[0].words).toBeUndefined();
   });
 
@@ -288,5 +297,126 @@ describe("tapping a line's start", () => {
     const line: Line = { t: null, text: "a b" };
     stampStart(line, 3);
     expect(line).toEqual({ t: 3, text: "a b" });
+  });
+});
+
+describe("editing as text", () => {
+  const song = (): Line[] => [
+    { t: 10, text: "I took a walk", words: [10, 10.4, 10.7, 11] },
+    { t: 13, text: "around the world" },
+    { t: 17, text: "" },
+    { t: 20, text: "to ease my mind" },
+  ];
+
+  test("typing into a word keeps the times of the words around it", () => {
+    const l: Line = { t: 10, text: "I took a walk", words: [10, 10.4, 10.7, 11] };
+    editText(l, 1, 1, " really");
+    expect(l.text).toBe("I really took a walk");
+    expect(l.words).toEqual([10, null, 10.4, 10.7, 11]);
+  });
+
+  test("typing clears the engine's doubts about the line", () => {
+    const l: Line = { t: 10, text: "I took a walk", doubt: [1] };
+    editText(l, 13, 13, "!");
+    expect(l.doubt).toEqual([]);
+  });
+
+  test("Delete at the end of a line brings the next one up", () => {
+    const lines = song();
+    expect(joinDown(lines, 0, false)).toEqual({ line: 0, off: 13 });
+    expect(lines[0].text).toBe("I took a walk around the world");
+    expect(lines[0].t).toBe(10);
+    expect(lines).toHaveLength(3);
+  });
+
+  test("Delete before an empty line just removes it", () => {
+    const lines = song();
+    expect(joinDown(lines, 1, false)).toEqual({ line: 1, off: 16 });
+    expect(lines.map((l) => l.text)).toEqual(["I took a walk", "around the world", "to ease my mind"]);
+  });
+
+  test("Delete on an empty line pulls the next one up with its start", () => {
+    const lines = song();
+    expect(joinDown(lines, 2, false)).toEqual({ line: 2, off: 0 });
+    expect(lines[2]).toEqual({ t: 20, text: "to ease my mind" });
+  });
+
+  test("deleting a selection across lines joins exactly where it ends", () => {
+    const lines = song();
+    const at = deleteRange(lines, { line: 0, off: 7 }, { line: 3, off: 3 }, true);
+    expect(at).toEqual({ line: 0, off: 7 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0].text).toBe("I took ease my mind");
+    expect(lines[0].t).toBe(10);
+    expect(lines[0].ok).toBe(false);
+  });
+
+  test("a selection from the start of a line leaves the last line its own start", () => {
+    const lines = song();
+    deleteRange(lines, { line: 1, off: 0 }, { line: 3, off: 3 }, false);
+    expect(lines[1]).toEqual({ t: 20, text: "ease my mind" });
+  });
+
+  test("cutting whole lines leaves an empty line with no start, not a pause", () => {
+    const lines = song();
+    deleteRange(lines, { line: 0, off: 0 }, { line: 1, off: 16 }, false);
+    expect(lines[0]).toEqual({ t: null, text: "" });
+  });
+
+  test("joining mid-word makes one untimed word of the halves", () => {
+    const lines = song();
+    deleteRange(lines, { line: 0, off: 11 }, { line: 1, off: 2 }, false);
+    expect(lines[0].text).toBe("I took a waound the world");
+    expect(lines[0].words).toEqual([10, 10.4, 10.7, null, null, null]);
+  });
+
+  test("copied lines carry their starts; a part line starts at its first timed word", () => {
+    const lines = song();
+    const got = sliceLines(lines, { line: 0, off: 7 }, { line: 1, off: 6 });
+    expect(got).toEqual([
+      { t: 10.7, text: "a walk", words: [10.7, 11] },
+      { t: 13, text: "around" },
+    ]);
+  });
+
+  test("whole lines pasted at the start of a line go in above it, times and all", () => {
+    const lines = song();
+    const moved = sliceLines(lines, { line: 3, off: 0 }, { line: 3, off: 15 });
+    moved.push({ t: null, text: "" }); // a copy that ended at the start of the next line
+    const at = insertLines(lines, { line: 1, off: 0 }, moved, false);
+    expect(at).toEqual({ line: 2, off: 0 });
+    expect(lines.map((l) => [l.t, l.text])).toEqual([
+      [10, "I took a walk"],
+      [20, "to ease my mind"],
+      [13, "around the world"],
+      [17, ""],
+      [20, "to ease my mind"],
+    ]);
+  });
+
+  test("pasting several lines mid-line splits it around them", () => {
+    const lines = song();
+    const at = insertLines(
+      lines,
+      { line: 1, off: 7 },
+      [
+        { t: null, text: "X" },
+        { t: 15, text: "middle" },
+        { t: null, text: "Y " },
+      ],
+      false
+    );
+    expect(lines.slice(1, 4).map((l) => [l.t, l.text])).toEqual([
+      [13, "around X"],
+      [15, "middle"],
+      [null, "Y the world"],
+    ]);
+    expect(at).toEqual({ line: 3, off: 2 });
+  });
+
+  test("one line pasted into an empty one brings its start", () => {
+    const lines = song();
+    insertLines(lines, { line: 2, off: 0 }, [{ t: 18, text: "la la" }], false);
+    expect(lines[2]).toEqual({ t: 18, text: "la la" });
   });
 });

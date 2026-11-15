@@ -13,3 +13,8 @@ What it should do instead: align the edited words with the old ones (or with the
 words, `heard_words`) and keep or interpolate their times. A one-off script that did this
 for Molly's saved edit worked well: a monotone alignment by spelling similarity, gaps spaced
 evenly, and a line the engine didn't hear borrowing the rhythm of a line with the same words.
+
+Partly eased (2026-11-15, plans/lyric-editor-text-editing.md): `editText` now keeps the times of
+words an edit didn't touch and leaves only the touched ones untimed. A line with an untimed word
+still saves without word timing (`toTiming` needs every word), so the alignment asked for here
+is still open.

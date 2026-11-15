@@ -128,11 +128,193 @@ export function joinLine(lines: Line[], i: number, text: string, reviewing: bool
   return at;
 }
 
-/// Line `i`'s text changed to `text`. Its word times stay if it still has as many words —
-/// a spelling fixed — and go if not, since which time belongs to which word is then unknown.
+/// Line `i`'s text changed to `text`, by whatever means (an input method, say). Worked out as
+/// the one edit between the common start and end of the two, then made with `editText`.
 export function retext(line: Line, text: string) {
-  if (line.words && wordsOf(text).length !== line.words.length) delete line.words;
+  const old = line.text;
+  let a = 0;
+  while (a < old.length && a < text.length && old[a] === text[a]) a++;
+  let b = 0;
+  while (b < old.length - a && b < text.length - a && old[old.length - 1 - b] === text[text.length - 1 - b])
+    b++;
+  editText(line, a, old.length - b, text.slice(a, text.length - b));
+}
+
+// ---- editing as text ------------------------------------------------------------------------
+// The editor is one text across all the lines: a caret or a selection is a pair of positions,
+// and every edit — typing, deleting, cutting, pasting — is made here, so each line's start,
+// word times and review state follow the words they belong to.
+
+/// A place in the lines: line `line`, `off` characters in.
+export interface Pos {
+  line: number;
+  off: number;
+}
+
+export const comparePos = (a: Pos, b: Pos) => a.line - b.line || a.off - b.off;
+
+/// Each word of `text` as [start, end) in characters, in the order `wordsOf` gives them.
+function wordSpans(text: string): [number, number][] {
+  const out: [number, number][] = [];
+  for (const m of text.matchAll(/\S+/g)) out.push([m.index!, m.index! + m[0].length]);
+  return out;
+}
+
+/// Replace characters [start, end) of `line` with `insert`. Word times stay when the line still
+/// has as many words (a spelling fixed). Otherwise the words the edit didn't touch keep their
+/// times and the ones it did lose theirs: which time belongs to a changed word is unknown. The
+/// engine's doubts are about words that have now been looked at, so they go.
+export function editText(line: Line, start: number, end: number, insert: string) {
+  const old = line.text;
+  const text = old.slice(0, start) + insert + old.slice(end);
   line.text = text;
+  if (line.doubt?.length) line.doubt = [];
+  if (!line.words) return;
+  const n = wordsOf(text).length;
+  if (n === line.words.length) return;
+  const spans = wordSpans(old);
+  const joined = (c: string | undefined) => c !== undefined && /\S/.test(c);
+  // A word is untouched if it lies wholly outside the edit and nothing new is glued onto it.
+  const before = spans.filter(([, e]) => e < start || (e === start && !joined(text[start]))).length;
+  const afterAt = start + insert.length;
+  const after = spans.filter(([s]) => s > end || (s === end && !joined(text[afterAt - 1]))).length;
+  const mid = n - before - after;
+  if (mid < 0) {
+    delete line.words;
+    return;
+  }
+  const words = [
+    ...line.words.slice(0, before),
+    ...Array<number | null>(mid).fill(null),
+    ...line.words.slice(line.words.length - after),
+  ];
+  if (words.some((w) => w !== null)) line.words = words;
+  else delete line.words;
+}
+
+const cloneLine = (l: Line): Line => ({
+  ...l,
+  ...(l.words ? { words: l.words.slice() } : {}),
+  ...(l.doubt ? { doubt: l.doubt.slice() } : {}),
+});
+
+/// Delete from `from` to `to` (in order), across lines or within one. Across lines, the text
+/// joins exactly where the deletion ends, as in any text editor. The first line keeps its
+/// start, unless nothing of it is left: then the line the deletion ended in keeps its own.
+/// Returns the caret.
+export function deleteRange(lines: Line[], from: Pos, to: Pos, reviewing: boolean): Pos {
+  if (from.line === to.line) {
+    editText(lines[from.line], from.off, to.off, "");
+    return from;
+  }
+  const a = lines[from.line];
+  const b = lines[to.line];
+  editText(b, 0, to.off, "");
+  // With its beginning gone, the last line starts at its first word left, if that has a time.
+  // With nothing left it starts nowhere: a timed empty line would be a pause.
+  if (to.off > 0) b.t = b.words?.[0] ?? (b.text.trim() ? b.t : null);
+  editText(a, from.off, a.text.length, "");
+  lines.splice(from.line + 1, to.line - from.line - 1);
+  if (!a.text) {
+    lines.splice(from.line, 1);
+    if (reviewing && b.text.trim()) b.ok = false;
+    return { line: from.line, off: 0 };
+  }
+  if (b.text) {
+    if (a.words || b.words) {
+      const aw = a.words ?? wordsOf(a.text).map(() => null);
+      const bw = b.words ?? wordsOf(b.text).map((_, k) => (k === 0 ? b.t : null));
+      // Joined mid-word, the two halves are one word now, with no known time.
+      const glued = /\S$/.test(a.text) && /^\S/.test(b.text);
+      const words = glued ? [...aw.slice(0, -1), null, ...bw.slice(1)] : [...aw, ...bw];
+      if (words.some((w) => w !== null)) a.words = words;
+      else delete a.words;
+    }
+    a.text += b.text;
+  }
+  if (reviewing) {
+    a.doubt = [];
+    a.ok = false;
+  }
+  lines.splice(from.line + 1, 1);
+  return from;
+}
+
+/// Join the line below `i` onto it: Delete at the end of a line. The counterpart of Backspace
+/// at the start of the next one (`joinLine`), with the caret left where it was.
+export function joinDown(lines: Line[], i: number, reviewing: boolean): Pos {
+  const below = lines[i + 1];
+  if (!below.text.trim()) {
+    lines.splice(i + 1, 1);
+    return { line: i, off: lines[i].text.length };
+  }
+  const at = joinLine(lines, i + 1, below.text, reviewing);
+  return { line: i, off: Math.max(0, at - 1) };
+}
+
+/// The lines between `from` and `to`, cut down to the selection, with their starts and word
+/// times: what a copy carries. A first line copied from mid-way starts at its first word, if
+/// that has a time.
+export function sliceLines(lines: Line[], from: Pos, to: Pos): Line[] {
+  const out = lines.slice(from.line, to.line + 1).map(cloneLine);
+  const last = out[out.length - 1];
+  editText(last, to.off, last.text.length, "");
+  if (from.off > 0) {
+    const first = out[0];
+    editText(first, 0, from.off, "");
+    first.t = first.words?.[0] ?? null;
+  }
+  return out;
+}
+
+/// Insert `frags` at `at`: a paste. One fragment goes into the line. More split it: the first
+/// fragment ends this line, the last starts the rest of it, and the ones between are lines of
+/// their own, with their own starts. Pasted into the start of a line, the line moves down
+/// whole, start and all. Returns the caret, after what was pasted.
+export function insertLines(lines: Line[], at: Pos, frags: Line[], reviewing: boolean): Pos {
+  const line = lines[at.line];
+  const first = frags[0];
+  if (frags.length === 1) {
+    if (!line.text && first.text) {
+      // An empty line takes a whole copied line as it is, time and all.
+      lines[at.line] = { ...cloneLine(first), t: first.t ?? line.t };
+      if (reviewing) lines[at.line].ok = false;
+    } else {
+      editText(line, at.off, at.off, first.text);
+      if (reviewing && first.text) line.ok = false;
+    }
+    return { line: at.line, off: at.off + first.text.length };
+  }
+
+  const tail = cloneLine(line);
+  let head: Line;
+  if (!line.text.slice(0, at.off).trim()) {
+    // Nothing before the caret: the line moves down whole, and the first fragment takes its place.
+    editText(tail, 0, at.off, "");
+    head = cloneLine(first);
+  } else {
+    editText(tail, 0, at.off, "");
+    tail.t = tail.words?.[0] ?? null;
+    if (reviewing) tail.ok = false;
+    head = line;
+    editText(head, at.off, head.text.length, "");
+    editText(head, head.text.length, head.text.length, first.text);
+    if (reviewing) head.ok = false;
+  }
+
+  const last = frags[frags.length - 1];
+  let end: Line;
+  if (!last.text) end = tail;
+  else if (!tail.text) end = cloneLine(last);
+  else {
+    end = tail;
+    editText(end, 0, 0, last.text);
+    end.t = last.t ?? tail.t;
+    if (reviewing) end.ok = false;
+  }
+
+  lines.splice(at.line, 1, head, ...frags.slice(1, -1).map(cloneLine), end);
+  return { line: at.line + frags.length - 1, off: last.text.length };
 }
 
 /// The editor's lines from a Lyricsfile's timing. A line's end becomes the empty line that

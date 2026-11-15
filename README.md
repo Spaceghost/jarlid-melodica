@@ -45,10 +45,14 @@ anywhere in it.
   the 56 test songs, 81% of drafted words are right, 72% of lines start within 1 s of where they
   should, and the underlines catch 63% of the wrong words. Songs with no singing, or singing too
   unclear to be worth a draft, say so instead. The pencil opens it for review: read along as the
-  playing line is marked, fix what's wrong (Enter splits a line, Backspace at its start joins it
-  to the one above), and tick each line once it's right. Publish stays locked until every line
+  playing line is marked, fix what's wrong, and tick each line once it's right. Publish stays locked until every line
   is ticked, and a review saved partway carries on next time. Drafts come timed word by word,
   from when the engine heard each word.
+- **Editing lyrics as text**: the pencil turns the lyrics into one text to edit. The arrow
+  keys move between lines, a selection can run across lines, and Enter, Backspace, Delete,
+  cut, copy, paste and undo (Ctrl+Z, Ctrl+Y) work as in any text editor. Each line keeps its
+  start and word times through edits: a word you didn't touch keeps its time, and lines cut and
+  pasted elsewhere move with their timings. Pasted LRC text keeps its timestamps too.
 - **Timeline for timing lyrics**: in the editor, the **Timeline** button shows the song's
   waveform with the lyrics laid on it, and under it the words the speech engine heard. Each
   line is a block: drag its left edge to where it starts and its right edge to where it ends.

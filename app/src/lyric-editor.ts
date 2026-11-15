@@ -26,9 +26,15 @@ import { fillMarked } from "./draft-marks";
 import { sectionLabel, withSections } from "./sections";
 import {
   applyReview,
+  comparePos,
+  deleteRange,
+  editText,
+  insertLines,
   isBlank,
+  joinDown,
   joinLine,
   reviewState,
+  sliceLines,
   splitLine,
   unreviewed as unreviewedIn,
   fromTiming,
@@ -37,6 +43,7 @@ import {
   stampStart,
   toTiming,
   type Line,
+  type Pos,
   type TimedLine,
 } from "./edit-lines";
 
@@ -184,6 +191,7 @@ export function begin(context: EditorContext) {
   load(context.lyrics);
 
   lyricsEl.classList.add("editing");
+  setEditable(true);
   bar.hidden = false;
   render();
   refreshBar();
@@ -210,6 +218,7 @@ function load(l: Lyrics) {
   const draft = l.draft;
   reviewing = !!draft;
   if (draft) applyReview(lines, draft);
+  resetHistory();
 }
 
 export function end() {
@@ -219,6 +228,7 @@ export function end() {
   timeline.close();
   nowRow = -1;
   lyricsEl.classList.remove("editing", "stamping");
+  setEditable(false);
   bar.hidden = true;
   confirm.cancel();
   ctx?.onExit();
@@ -251,6 +261,7 @@ export function notePlaybackMoved() {
   stale = true;
   stamping = false;
   lyricsEl.classList.remove("stamping");
+  setEditable(true);
   refreshBar();
   render();
   setStatus(
@@ -261,62 +272,81 @@ export function notePlaybackMoved() {
 
 // ---- rendering ------------------------------------------------------------
 
+/// The whole list is one editing host, so a caret moves and a selection runs across lines the
+/// way they do in any text editor. Each row's controls are islands in it that can't be edited
+/// or selected. Typing never changes the page directly: every edit is made to `lines` and the
+/// rows are drawn again (see "editing as text" below). A timing pass isn't editing: Space
+/// marks lines then, so the list takes no typing.
+function setEditable(on: boolean) {
+  if (on) {
+    lyricsEl.contentEditable = "true";
+    lyricsEl.spellcheck = false;
+    lyricsEl.setAttribute("role", "textbox");
+    lyricsEl.setAttribute("aria-multiline", "true");
+    lyricsEl.setAttribute("aria-label", "Lyrics");
+  } else {
+    lyricsEl.removeAttribute("contenteditable");
+    lyricsEl.removeAttribute("role");
+    lyricsEl.removeAttribute("aria-multiline");
+    lyricsEl.removeAttribute("aria-label");
+  }
+}
+
+/// Draw every row again, keeping the scroll position and, if the list has focus, the selection.
+function render() {
+  const keep = lyricsEl === document.activeElement ? modelSelection() : null;
+  const top = lyricsEl.scrollTop;
+  lyricsEl.replaceChildren(...lines.map(rowFor));
+  lyricsEl.scrollTop = top;
+  if (keep && !stamping) setSelection(clampPos(keep.anchor), clampPos(keep.focus));
+}
+
 /// Rows keep `.line` and `data-idx` so the pane's own styling still applies; the extra
 /// children are what edit mode adds.
-function render() {
-  lyricsEl.innerHTML = "";
-  lines.forEach((line, i) => {
-    const row = document.createElement("div");
-    row.className = "line editable";
-    row.dataset.idx = String(i);
-    if (stamping && i === cursor) row.classList.add("cursor");
-    if (isBlank(line)) row.classList.add("blank");
-    if (isLabel(line)) row.classList.add("section");
-    if (line.t !== null) row.classList.add("timed");
-    if (i === nowRow) row.classList.add("now");
-    if (i === selected) row.classList.add("selected");
-    if (reviewing) row.classList.add("draft");
+function rowFor(line: Line, i: number) {
+  const row = document.createElement("div");
+  row.className = "line editable";
+  row.dataset.idx = String(i);
+  if (stamping && i === cursor) row.classList.add("cursor");
+  if (isBlank(line)) row.classList.add("blank");
+  if (isLabel(line)) row.classList.add("section");
+  if (line.t !== null) row.classList.add("timed");
+  if (i === nowRow) row.classList.add("now");
+  if (i === selected) row.classList.add("selected");
+  if (reviewing) row.classList.add("draft");
 
-    const time = document.createElement("button");
-    time.className = "ln-time";
-    time.textContent = line.t === null ? "––:––" : stampOf(line.t);
-    time.addEventListener("click", () => (stamping ? markAt(i) : setNow(i)));
+  const time = control("button", "ln-time");
+  time.textContent = line.t === null ? "––:––" : stampOf(line.t);
+  time.addEventListener("click", () => (stamping ? markAt(i) : setNow(i)));
 
-    const text = document.createElement("div");
-    text.className = "ln-text";
-    text.contentEditable = "plaintext-only";
-    text.spellcheck = false;
-    fillMarked(text, line.text, line.doubt ?? []);
-    text.addEventListener("input", () => {
-      retext(lines[i], text.textContent ?? "");
-      // The reviewer has been at this line: the engine's doubts about it are answered.
-      if (lines[i].doubt?.length) {
-        lines[i].doubt = [];
-        row.classList.add("touched");
-      }
-      markDirty();
-    });
-    text.addEventListener("paste", (e) => onPaste(e, i));
-    text.addEventListener("keydown", (e) => onLineKey(e, i, text));
-    text.addEventListener("focus", () => selectLine(i, false));
+  const text = document.createElement("div");
+  text.className = "ln-text";
+  fillMarked(text, line.text, line.doubt ?? []);
+  // An empty line needs something in it to hold a caret.
+  if (!line.text) text.append(document.createElement("br"));
 
-    const check = document.createElement("button");
-    check.className = "ln-check";
-    check.textContent = "▶";
-    check.disabled = line.t === null || !ctx?.canTransport || stale;
-    check.addEventListener("click", () => checkLine(i));
+  const check = control("button", "ln-check");
+  check.textContent = "▶";
+  check.disabled = line.t === null || !ctx?.canTransport || stale;
+  check.addEventListener("click", () => checkLine(i));
 
-    row.append(time, text, check);
-    if (reviewing) row.append(reviewButton(line, i, row));
-    lyricsEl.appendChild(row);
-  });
+  row.append(time, text, check);
+  if (reviewing) row.append(reviewButton(line, i, row));
+  return row;
+}
+
+/// A row control: inside the editing host, but not part of the text.
+function control<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string) {
+  const el = document.createElement(tag);
+  el.className = cls;
+  el.contentEditable = "false";
+  return el;
 }
 
 /// A draft line's ✓: pressed once the line's words and start are right. A line in timed
 /// lyrics needs a start before it can be checked, or it would vanish from the synced copy.
 function reviewButton(line: Line, i: number, row: HTMLElement) {
-  const ok = document.createElement("button");
-  ok.className = "ln-ok";
+  const ok = control("button", "ln-ok");
   ok.textContent = "✓";
   if (isBlank(line)) {
     ok.disabled = true;
@@ -419,94 +449,430 @@ function followPlayhead() {
   if (row && reviewing && !typing) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
-function focusLine(i: number, toEnd = true) {
-  const el = lyricsEl.querySelector<HTMLElement>(`.line[data-idx="${i}"] .ln-text`);
-  if (!el) return;
-  el.focus();
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(!toEnd);
-  const sel = getSelection();
-  sel?.removeAllRanges();
-  sel?.addRange(range);
-}
+// ---- editing as text ------------------------------------------------------
+// The list is one text: lines joined by line breaks. The browser moves the caret and draws
+// the selection; every change it would make is cancelled in `beforeinput` and made to `lines`
+// instead (edit-lines.ts), so starts, word times and review state follow the words. Enter
+// splits a line, Backspace at the start of a line joins it to the one above, and Delete at the
+// end joins the next one up. Adding and removing lines has to work without a separate editor,
+// or "no lyrics found" is a dead end, and a draft's lines are often broken in the wrong place.
 
-// ---- line editing ---------------------------------------------------------
+const CLIP_TYPE = "application/x-jarlid-lines";
 
-/// Enter splits the line at the caret (at the end, that opens a new line below), Backspace
-/// on an empty one removes it, and Backspace at the start of one joins it to the line above.
-/// This is what replaces the old full-page textarea: adding and removing lines has to be
-/// possible without a separate editor, or "no lyrics found" is a dead end — and a draft's
-/// lines are often broken in the wrong place.
-function onLineKey(e: KeyboardEvent, i: number, el: HTMLElement) {
-  const text = el.textContent ?? "";
-  if (e.key === "Enter") {
-    e.preventDefault();
-    const at = caretOffset(el) ?? text.length;
-    splitLine(lines, i, text, at, reviewing);
-    if (cursor > i) cursor++;
-    markDirty();
-    render();
-    focusLine(i + 1, false);
-  } else if (e.key === "Backspace" && text && i > 0 && caretOffset(el) === 0) {
-    e.preventDefault();
-    const at = joinLine(lines, i, text, reviewing);
-    if (cursor >= i) cursor--;
-    markDirty();
-    render();
-    focusLineAt(i - 1, at);
-  } else if (e.key === "Backspace" && !text && lines.length > 1) {
-    e.preventDefault();
-    lines.splice(i, 1);
-    if (cursor > i) cursor--;
-    markDirty();
-    render();
-    focusLine(Math.max(0, i - 1));
+const textElOf = (i: number) =>
+  lyricsEl.querySelector<HTMLElement>(`.line[data-idx="${i}"] .ln-text`);
+
+/// The model position of a DOM point in the list, or null outside it. A point on a row's
+/// controls, or between rows, lands at the near end of that row's words.
+function posOf(node: Node, offset: number): Pos | null {
+  if (!lines.length || !lyricsEl.contains(node)) return null;
+  const end = (i: number): Pos => ({ line: i, off: lines[i].text.length });
+  if (node === lyricsEl) {
+    const row = lyricsEl.children[offset] as HTMLElement | undefined;
+    return row ? { line: Number(row.dataset.idx), off: 0 } : end(lines.length - 1);
   }
+  const el = node instanceof Element ? node : node.parentElement;
+  const row = el?.closest<HTMLElement>(".line");
+  if (!row) return null;
+  const i = Number(row.dataset.idx);
+  if (!(i in lines)) return null;
+  const text = row.querySelector<HTMLElement>(".ln-text")!;
+  if (text.contains(node)) {
+    const r = document.createRange();
+    r.selectNodeContents(text);
+    r.setEnd(node, offset);
+    return { line: i, off: Math.min(r.toString().length, lines[i].text.length) };
+  }
+  const before =
+    node === row
+      ? offset <= Array.prototype.indexOf.call(row.childNodes, text)
+      : !!(text.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING);
+  return before ? { line: i, off: 0 } : end(i);
 }
 
-/// Characters before the caret in `el`, or null without a caret in it.
-function caretOffset(el: HTMLElement): number | null {
+interface Selected {
+  anchor: Pos;
+  focus: Pos;
+  from: Pos;
+  to: Pos;
+  collapsed: boolean;
+}
+
+function modelSelection(): Selected | null {
   const sel = getSelection();
-  if (!sel?.rangeCount || !sel.isCollapsed) return null;
-  const range = sel.getRangeAt(0);
-  if (!el.contains(range.startContainer)) return null;
-  const before = document.createRange();
-  before.selectNodeContents(el);
-  before.setEnd(range.startContainer, range.startOffset);
-  return before.toString().length;
+  if (!sel?.rangeCount || !sel.anchorNode || !sel.focusNode) return null;
+  const anchor = posOf(sel.anchorNode, sel.anchorOffset);
+  const focus = posOf(sel.focusNode, sel.focusOffset);
+  if (!anchor || !focus) return null;
+  const [from, to] = comparePos(anchor, focus) <= 0 ? [anchor, focus] : [focus, anchor];
+  return { anchor, focus, from, to, collapsed: comparePos(from, to) === 0 };
 }
 
-/// Focus line `i` with the caret `at` characters in.
-function focusLineAt(i: number, at: number) {
-  const el = lyricsEl.querySelector<HTMLElement>(`.line[data-idx="${i}"] .ln-text`);
-  if (!el) return;
-  el.focus();
+const clampPos = (p: Pos): Pos => {
+  const line = Math.min(Math.max(0, p.line), lines.length - 1);
+  return { line, off: Math.min(p.off, lines[line].text.length) };
+};
+
+/// The DOM point for a model position.
+function domPoint(p: Pos): [Node, number] {
+  const el = textElOf(p.line)!;
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  let left = at;
+  let left = p.off;
+  let lastNode: Node | null = null;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const len = node.textContent?.length ?? 0;
-    if (left <= len) {
-      getSelection()?.collapse(node, left);
-      return;
-    }
+    if (left <= len) return [node, left];
     left -= len;
+    lastNode = node;
   }
-  focusLine(i);
+  return lastNode ? [lastNode, lastNode.textContent?.length ?? 0] : [el, 0];
 }
 
-/// Pasting a whole song into one line splits it across lines rather than jamming it into
-/// one. Without this, a track LRCLIB has nothing for would have no usable path.
-function onPaste(e: ClipboardEvent, i: number) {
-  const text = e.clipboardData?.getData("text/plain") ?? "";
-  if (!text.includes("\n")) return; // ordinary paste, let the browser do it
-  e.preventDefault();
-  const pasted = parseLines(text);
-  lines.splice(i, 1, ...pasted);
+function setSelection(anchor: Pos, focus: Pos = anchor) {
+  if (!lines.length || !textElOf(anchor.line) || !textElOf(focus.line)) return;
+  if (document.activeElement !== lyricsEl) lyricsEl.focus({ preventScroll: true });
+  const [an, ao] = domPoint(anchor);
+  const [fn, fo] = domPoint(focus);
+  getSelection()?.setBaseAndExtent(an, ao, fn, fo);
+}
+
+/// Make an edit to `lines`: `run` changes them and returns where the caret goes. The stamping
+/// cursor and the selected line follow their lines, wherever the edit moved them.
+function edit(kind: string, run: () => Pos) {
+  recordEdit(kind);
+  const cursorLine = lines[cursor];
+  const selectedLine = lines[selected];
+  const caret = run();
+  if (!lines.length) lines.push({ t: null, text: "" });
+  const c = lines.indexOf(cursorLine);
+  cursor = c >= 0 ? c : Math.min(cursor, lines.length - 1);
+  const s = lines.indexOf(selectedLine);
+  selected = s >= 0 ? s : -1;
   markDirty();
   render();
-  focusLine(i + pasted.length - 1);
+  const at = clampPos(caret);
+  setSelection(at);
+  lyricsEl
+    .querySelector(`.line[data-idx="${at.line}"]`)
+    ?.scrollIntoView({ block: "nearest", behavior: "auto" });
+  settleHistory();
 }
+
+/// Delete what is selected, if anything; the caret is where it was.
+function clearSelection(s: Selected): Pos {
+  return s.collapsed ? s.from : deleteRange(lines, s.from, s.to, reviewing);
+}
+
+lyricsEl.addEventListener("beforeinput", (e) => {
+  if (!editing) return;
+  // An input method's text can't be cancelled; it is read back on `input`.
+  if (e.inputType === "insertCompositionText") return;
+  e.preventDefault();
+  const s = modelSelection();
+  if (!s) return;
+  const type = e.inputType;
+  if (type === "historyUndo") return undo();
+  if (type === "historyRedo") return redo();
+
+  if (type === "insertText" || type === "insertReplacementText") {
+    let data = e.data ?? e.dataTransfer?.getData("text/plain") ?? "";
+    data = data.replace(/\r\n?/g, "\n");
+    // A spelling fix names the words it replaces, not the selection.
+    const target = e.getTargetRanges()[0];
+    const range =
+      type === "insertReplacementText" && target
+        ? rangeOf(target) ?? { from: s.from, to: s.to }
+        : { from: s.from, to: s.to };
+    if (data.includes("\n")) return pasteFragments({ ...s, ...range }, fragmentsOfText(data));
+    edit(data === " " ? "space" : "type", () => {
+      const at = comparePos(range.from, range.to)
+        ? deleteRange(lines, range.from, range.to, reviewing)
+        : range.from;
+      editText(lines[at.line], at.off, at.off, data);
+      return { line: at.line, off: at.off + data.length };
+    });
+    return;
+  }
+
+  if (type === "insertParagraph" || type === "insertLineBreak") {
+    edit("break", () => {
+      const at = clearSelection(s);
+      splitLine(lines, at.line, lines[at.line].text, at.off, reviewing);
+      return { line: at.line + 1, off: 0 };
+    });
+    return;
+  }
+
+  if (type.startsWith("delete") && type !== "deleteByCut" && type !== "deleteByDrag") {
+    if (!s.collapsed) return edit("delete", () => clearSelection(s));
+    const backward = type.includes("Backward");
+    const { line: i, off } = s.from;
+    const L = lines[i];
+    if (backward && off === 0) {
+      if (i === 0) return;
+      edit("join", () => {
+        if (!L.text) {
+          lines.splice(i, 1);
+          return { line: i - 1, off: lines[i - 1].text.length };
+        }
+        return { line: i - 1, off: joinLine(lines, i, L.text, reviewing) };
+      });
+      return;
+    }
+    if (!backward && off >= L.text.length) {
+      if (i === lines.length - 1) return;
+      edit("join", () => joinDown(lines, i, reviewing));
+      return;
+    }
+    // Within the line: what the key would delete (a character, a word, to the line's end),
+    // as the browser works it out, but never past this line.
+    const target = e.getTargetRanges()[0];
+    const r = target ? rangeOf(target) : null;
+    let a = r ? (r.from.line < i ? 0 : r.from.line > i ? L.text.length : r.from.off) : off;
+    let b = r ? (r.to.line > i ? L.text.length : r.to.line < i ? 0 : r.to.off) : off;
+    if (a === b) {
+      // No range offered: one character, whole if it is a surrogate pair.
+      if (backward) a = off - (/[\uDC00-\uDFFF]/.test(L.text[off - 1]) && off > 1 ? 2 : 1);
+      else b = off + (/[\uD800-\uDBFF]/.test(L.text[off]) ? 2 : 1);
+    }
+    edit(backward ? "backspace" : "delete", () => {
+      editText(L, a, b, "");
+      return { line: i, off: a };
+    });
+  }
+  // Anything else (formatting, drag and drop) changes nothing.
+});
+
+function rangeOf(r: StaticRange): { from: Pos; to: Pos } | null {
+  const a = posOf(r.startContainer, r.startOffset);
+  const b = posOf(r.endContainer, r.endOffset);
+  if (!a || !b) return null;
+  return comparePos(a, b) <= 0 ? { from: a, to: b } : { from: b, to: a };
+}
+
+// An input method writes into the page itself. Whatever it changed is read back into the
+// lines; a change the rows can't hold any more is redrawn from them.
+let composing = false;
+lyricsEl.addEventListener("compositionstart", () => {
+  if (!editing) return;
+  composing = true;
+  recordEdit("compose");
+});
+lyricsEl.addEventListener("compositionend", () => {
+  composing = false;
+  if (editing) syncFromPage();
+});
+lyricsEl.addEventListener("input", () => {
+  if (editing && !composing) syncFromPage();
+});
+
+function syncFromPage() {
+  const rows = [...lyricsEl.querySelectorAll<HTMLElement>(":scope > .line")];
+  let changed = false;
+  rows.forEach((row) => {
+    const i = Number(row.dataset.idx);
+    const text = row.querySelector(".ln-text")?.textContent ?? "";
+    if (i in lines && text !== lines[i].text) {
+      retext(lines[i], text);
+      changed = true;
+    }
+  });
+  if (changed) markDirty();
+  const tidy =
+    rows.length === lyricsEl.childNodes.length &&
+    rows.length === lines.length &&
+    rows.every((r) => r.querySelector(".ln-text"));
+  if (!composing && (changed || !tidy)) {
+    const keep = modelSelection();
+    render();
+    if (keep) setSelection(clampPos(keep.anchor), clampPos(keep.focus));
+  }
+  settleHistory();
+}
+
+// ---- the clipboard ---------------------------------------------------------
+// A copy carries the lines twice: as text, for anywhere else, and with their starts and word
+// times under a type of its own, so cutting lines and pasting them elsewhere moves them with
+// their timing. Pasted LRC text keeps its timestamps too.
+
+function writeClipboard(data: DataTransfer, frags: Line[]) {
+  data.setData("text/plain", frags.map((l) => l.text).join("\n"));
+  data.setData(
+    CLIP_TYPE,
+    JSON.stringify(frags.map(({ t, text, words }) => ({ t, text, ...(words ? { words } : {}) })))
+  );
+}
+
+lyricsEl.addEventListener("copy", (e) => {
+  const s = editing ? modelSelection() : null;
+  if (!s || s.collapsed || !e.clipboardData) return;
+  e.preventDefault();
+  writeClipboard(e.clipboardData, sliceLines(lines, s.from, s.to));
+});
+
+lyricsEl.addEventListener("cut", (e) => {
+  const s = editing ? modelSelection() : null;
+  if (!s || !e.clipboardData) return;
+  e.preventDefault();
+  if (s.collapsed) return;
+  writeClipboard(e.clipboardData, sliceLines(lines, s.from, s.to));
+  edit("cut", () => clearSelection(s));
+});
+
+lyricsEl.addEventListener("paste", (e) => {
+  if (!editing) return;
+  e.preventDefault();
+  const s = modelSelection();
+  const data = e.clipboardData;
+  if (!s || !data) return;
+  const frags = fragmentsOfClip(data.getData(CLIP_TYPE)) ?? fragmentsOfText(data.getData("text/plain"));
+  if (frags.length) pasteFragments(s, frags);
+});
+
+// Dragging text around would let the browser move it behind the model's back.
+lyricsEl.addEventListener("dragstart", (e) => editing && e.preventDefault());
+lyricsEl.addEventListener("drop", (e) => editing && e.preventDefault());
+
+function pasteFragments(s: { from: Pos; to: Pos }, frags: Line[]) {
+  edit("paste", () => {
+    const at = comparePos(s.from, s.to) ? deleteRange(lines, s.from, s.to, reviewing) : s.from;
+    return insertLines(lines, at, frags, reviewing);
+  });
+}
+
+function fragmentsOfClip(json: string): Line[] | null {
+  if (!json) return null;
+  try {
+    const raw = JSON.parse(json);
+    if (!Array.isArray(raw) || !raw.length) return null;
+    return raw.map((l): Line => {
+      const t = typeof l?.t === "number" ? l.t : null;
+      const words = Array.isArray(l?.words)
+        ? l.words.map((w: unknown) => (typeof w === "number" ? w : null))
+        : undefined;
+      return { t, text: String(l?.text ?? ""), ...(words ? { words } : {}) };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/// Plain text as lines. One line pastes as it is; several are read as LRC, so a pasted song
+/// keeps any timestamps it has.
+function fragmentsOfText(text: string): Line[] {
+  text = text.replace(/\r\n?/g, "\n");
+  if (!text) return [];
+  if (!text.includes("\n")) {
+    const m = STAMP.exec(text);
+    return [m ? parseLines(text)[0] : { t: null, text }];
+  }
+  return parseLines(text);
+}
+
+// ---- undo -------------------------------------------------------------------
+// Edits are cancelled before the browser makes them, so its own undo has nothing to undo:
+// the editor keeps a history of the lines. Typing runs together into one step, broken at
+// spaces and pauses. A change made some other way — a timing, a drag on the timeline — is a
+// step of its own, found the next time the history is touched.
+
+interface Snapshot {
+  lines: Line[];
+  caret: Pos | null;
+}
+
+let undoStack: Snapshot[] = [];
+let redoStack: Snapshot[] = [];
+let settled: Snapshot = { lines: [], caret: null };
+let settledJson = "";
+let lastKind = "";
+let lastAt = 0;
+
+const snapshot = (): Snapshot => ({
+  lines: structuredClone(lines),
+  caret: modelSelection()?.focus ?? null,
+});
+
+function resetHistory() {
+  undoStack = [];
+  redoStack = [];
+  lastKind = "";
+  settleHistory();
+}
+
+function settleHistory() {
+  settled = snapshot();
+  settledJson = JSON.stringify(lines);
+}
+
+/// Whether the lines changed since the history last saw them, other than by its own edits.
+const changedOutside = () => JSON.stringify(lines) !== settledJson;
+
+function recordEdit(kind: string) {
+  const outside = changedOutside();
+  if (outside) undoStack.push(settled);
+  const now = Date.now();
+  // A space ends a run of typing, and starts the next, so undo goes back a word at a time.
+  const runOn =
+    !outside &&
+    (kind === "type" || kind === "backspace" || kind === "delete") &&
+    kind === lastKind &&
+    now - lastAt < 1500;
+  if (!runOn) undoStack.push(snapshot());
+  if (undoStack.length > 500) undoStack.shift();
+  redoStack = [];
+  lastKind = kind === "space" ? "type" : kind;
+  lastAt = now;
+}
+
+function restore(to: Snapshot) {
+  lines = structuredClone(to.lines);
+  if (!lines.length) lines.push({ t: null, text: "" });
+  cursor = Math.min(cursor, lines.length - 1);
+  if (selected >= lines.length) selected = -1;
+  lastKind = "";
+  markDirty();
+  render();
+  if (to.caret) setSelection(clampPos(to.caret));
+  settleHistory();
+}
+
+function undo() {
+  if (changedOutside()) {
+    undoStack.push(settled);
+    redoStack = [];
+  }
+  const prev = undoStack.pop();
+  if (!prev) return;
+  redoStack.push(snapshot());
+  restore(prev);
+}
+
+function redo() {
+  if (changedOutside()) redoStack = [];
+  const next = redoStack.pop();
+  if (!next) return;
+  undoStack.push(snapshot());
+  restore(next);
+}
+
+lyricsEl.addEventListener("keydown", (e) => {
+  if (!editing || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === "z" && !e.shiftKey) {
+    e.preventDefault();
+    undo();
+  } else if ((key === "z" && e.shiftKey) || key === "y") {
+    e.preventDefault();
+    redo();
+  }
+});
+
+// The line the caret is in is the line selected on the timeline.
+document.addEventListener("selectionchange", () => {
+  if (!editing || document.activeElement !== lyricsEl) return;
+  const s = modelSelection();
+  if (s) selectLine(s.focus.line, false);
+});
 
 function markDirty() {
   dirty = true;
@@ -574,12 +940,17 @@ function showCursor() {
 }
 
 /// A mark that landed wrong is fixed by going back a few seconds and marking again, not
-/// by sitting through the whole song. The cursor steps back with the playhead to the
-/// first line marked after the new position, so the next press redoes it.
+/// by sitting through the whole song. During a pass the cursor steps back with the playhead
+/// to the first line marked after the new position, so the next press redoes it. Outside
+/// one it is just a few seconds back, to hear a line again.
 function rewind() {
   if (!ctx || stale || !ctx.canTransport) return;
   const to = Math.max(0, ctx.playhead().position - REWIND);
   ctx.seek(to);
+  if (!stamping) {
+    setStatus(`Back to ${stampOf(to)}.`);
+    return;
+  }
   const redo = lines.findIndex((l, i) => i < cursor && !isBlank(l) && l.t !== null && l.t > to);
   if (redo >= 0) cursor = redo;
   render();
@@ -613,6 +984,7 @@ function startStamping() {
   }
   lyricsEl.style.setProperty("--stamp-pad", `${Math.round(lyricsEl.clientHeight / 2)}px`);
   lyricsEl.classList.add("stamping");
+  setEditable(false);
   render();
   refreshBar();
   showCursor();
@@ -623,6 +995,7 @@ function startStamping() {
 function stopStamping() {
   stamping = false;
   lyricsEl.classList.remove("stamping");
+  setEditable(true);
   render();
   refreshBar();
   // The pass's extra padding just went, so the list moved under the reader. Bring back
@@ -666,14 +1039,16 @@ function setStatus(text: string, kind?: "ok" | "err") {
 function refreshBar() {
   const timed = anyTimed();
   timestampBtn.textContent = stamping ? "Stop timing" : timed ? "Retime all…" : "Add timings…";
+  // The bar keeps the same buttons in the same places whatever is going on, so nothing moves
+  // under the pointer; one that can't act right now is disabled, not hidden.
   timestampBtn.disabled = busy || stale || !ctx?.canTransport;
-  rewindBtn.hidden = !stamping;
+  rewindBtn.disabled = busy || stale || !ctx?.canTransport;
   // Checking a line is only meaningful once something has a time, and auto-checking would
-  // wreck a continuous pass, so it is offered only outside one.
-  autoCheckWrap.hidden = stamping || !timed;
+  // wreck a continuous pass.
+  autoCheckBox.disabled = stamping || !timed;
+  autoCheckWrap.classList.toggle("off", autoCheckBox.disabled);
   saveBtn.disabled = busy || !dirty;
-  revertBtn.hidden = !ctx?.lyrics.overridden;
-  revertBtn.disabled = busy;
+  revertBtn.disabled = busy || !ctx?.lyrics.overridden;
   flagBtn.disabled = busy || !ctx?.lyrics.id;
   // A draft goes out only once a person has checked every line of it.
   const left = unreviewed();
