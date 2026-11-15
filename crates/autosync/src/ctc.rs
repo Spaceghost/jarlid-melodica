@@ -33,7 +33,8 @@ pub const STAR: usize = 28;
 /// punctuation, and `-`, which is the blank and would make the word unalignable. May be empty
 /// (a word of digits or symbols); such a word can't be aligned.
 pub fn romanize(word: &str) -> String {
-    word.nfkd()
+    crate::lookalike::fold(word)
+        .nfkd()
         .filter(|c| !is_combining_mark(*c))
         .flat_map(char::to_lowercase)
         .map(|c| if c == '’' { '\'' } else { c })

@@ -84,6 +84,25 @@ impl Lyrics {
         self.synced.is_none() && self.plain.is_none()
     }
 
+    /// Letters that only look Latin made Latin, in every text the lyrics carry (see
+    /// `autosync::lookalike`). Pasted lyrics bring them in; they look right and match nothing.
+    pub(crate) fn fold_lookalikes(&mut self) {
+        let fold = |s: &mut String| {
+            if autosync::lookalike::needs_fold(s) {
+                *s = autosync::lookalike::fold(s);
+            }
+        };
+        for s in [&mut self.synced, &mut self.plain].into_iter().flatten() {
+            fold(s);
+        }
+        for line in self.timing.iter_mut().flatten() {
+            fold(&mut line.text);
+            for w in &mut line.words {
+                fold(&mut w.text);
+            }
+        }
+    }
+
     /// Show a fresh draft: its timed lines, with nothing reviewed yet.
     fn show_draft(&mut self, draft: crate::autosync::Draft) {
         self.synced = Some(draft.lrc);
@@ -266,7 +285,21 @@ pub async fn fetch_lyrics(
 
 /// [`fetch_lyrics`] without the generated timings: what the listener's edit, their chosen
 /// record, the cache and LRCLIB say. Auto-sync asks this to decide whether a track needs it.
+/// Lookalike letters always come back Latin, so everything downstream sees the same text.
 pub(crate) async fn lookup(
+    app: &tauri::AppHandle,
+    artist: String,
+    track: String,
+    album: Option<String>,
+    duration: Option<f64>,
+    refresh: Option<bool>,
+) -> Result<Lyrics, String> {
+    let mut found = lookup_as_stored(app, artist, track, album, duration, refresh).await?;
+    found.fold_lookalikes();
+    Ok(found)
+}
+
+async fn lookup_as_stored(
     app: &tauri::AppHandle,
     artist: String,
     track: String,
@@ -605,6 +638,7 @@ pub async fn save_lyrics_override(
     let mut lyrics = lyrics;
     lyrics.overridden = true;
     lyrics.source = "local edit".into();
+    lyrics.fold_lookalikes();
     if lyrics.is_empty() {
         return Err("Nothing to save — the lyrics are empty".into());
     }

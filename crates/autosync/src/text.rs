@@ -5,9 +5,11 @@
 //! often as lyrics spell them out; that mismatch is left to the fuzzy match in [`similarity`]
 //! rather than guessed at here.
 
-/// The words of `s`, lowercased, with punctuation and apostrophes removed.
+/// The words of `s`, lowercased, with punctuation and apostrophes removed, and letters that only
+/// look Latin made Latin ([`crate::lookalike`]).
 pub fn words(s: &str) -> Vec<String> {
-    s.split(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | '/' | '…'))
+    crate::lookalike::fold(s)
+        .split(|c: char| c.is_whitespace() || matches!(c, '-' | '–' | '—' | '/' | '…'))
         .map(|w| {
             w.chars()
                 .filter(|c| c.is_alphanumeric())
@@ -196,6 +198,11 @@ mod tests {
             words("Ich liebe dich, señorita"),
             ["ich", "liebe", "dich", "señorita"]
         );
+    }
+
+    #[test]
+    fn words_see_through_lookalike_letters() {
+        assert_eq!(words("next to m\u{0435}"), ["next", "to", "me"]);
     }
 
     #[test]

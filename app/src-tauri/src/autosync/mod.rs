@@ -1014,8 +1014,37 @@ fn results_dir(app: &AppHandle) -> Option<PathBuf> {
 
 fn stored(app: &AppHandle, key: &str, plain: &str) -> Option<Stored> {
     let path = crate::lyrics::hashed_file(results_dir(app)?, key)?;
-    let s: Stored = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    (s.plain_hash == fnv(plain)).then_some(s)
+    let mut s: Stored = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if s.plain_hash == fnv(plain) {
+        return Some(s);
+    }
+    // Made before lyrics came back with lookalike letters made Latin (`autosync::lookalike`):
+    // the hash is of the words as they were, and `plain` is them folded. The result is still
+    // theirs when its timed lines, folded, are exactly the sung lines of `plain`. Kept as if
+    // made from `plain`, so the song isn't heard again for nothing.
+    s.lrc = Some(folded_result(s.lrc.as_deref()?, plain)?);
+    s.plain_hash = fnv(plain);
+    store(app, key, &s);
+    Some(s)
+}
+
+/// `lrc`, folded, when it was made from `plain` before it was folded: it has lookalike letters,
+/// and its timed lines, folded, are exactly the sung lines of `plain`.
+fn folded_result(lrc: &str, plain: &str) -> Option<String> {
+    if !autosync::lookalike::needs_fold(lrc) {
+        return None;
+    }
+    let lrc = autosync::lookalike::fold(lrc);
+    let timed: Vec<String> = autosync::lrc::parse(&lrc)
+        .into_iter()
+        .map(|l| l.text)
+        .collect();
+    let sung: Vec<&str> = plain
+        .lines()
+        .map(str::trim)
+        .filter(|l| !autosync::text::words(l).is_empty() && !autosync::text::is_section_label(l))
+        .collect();
+    (timed == sung).then_some(lrc)
 }
 
 /// The stored result for these words, re-timed first if an older aligner made it. `None` when
@@ -1247,7 +1276,13 @@ fn refined_dir(app: &AppHandle) -> Option<PathBuf> {
 
 fn stored_refined(app: &AppHandle, key: &str) -> Option<StoredRefined> {
     let path = crate::lyrics::hashed_file(refined_dir(app)?, key)?;
-    let s: StoredRefined = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let mut s: StoredRefined = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    // Lines refined before lyrics came back with lookalike letters made Latin still fit them.
+    for line in &mut s.lines {
+        if autosync::lookalike::needs_fold(&line.text) {
+            line.text = autosync::lookalike::fold(&line.text);
+        }
+    }
     (s.version == REFINE_VERSION).then_some(s)
 }
 
@@ -1536,5 +1571,19 @@ mod tests {
     fn plain_hash_changes_with_the_words() {
         assert_ne!(fnv("a line"), fnv("a line!"));
         assert_eq!(fnv("same"), fnv("same"));
+    }
+
+    #[test]
+    fn a_result_made_before_folding_is_kept_folded() {
+        // Kept from "Bettеr off" (Cyrillic е), before lyrics came back folded.
+        let lrc = "[00:01.00] Bett\u{0435}r off\n[00:03.00] alone";
+        let plain = "[Chorus]\nBetter off\n\nalone";
+        assert_eq!(
+            folded_result(lrc, plain).as_deref(),
+            Some("[00:01.00] Better off\n[00:03.00] alone")
+        );
+        // Other words, or a result that never had lookalikes: not this one.
+        assert_eq!(folded_result(lrc, "Better off\nalone now"), None);
+        assert_eq!(folded_result("[00:01.00] Better off", "Better off"), None);
     }
 }

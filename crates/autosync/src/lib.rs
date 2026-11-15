@@ -12,6 +12,7 @@
 //! - [`align`] — lyric words ↔ heard words, then line start times.
 //! - [`ctc`] — forced alignment of known words on an acoustic model's emission.
 //! - [`draft`] — when there are no lyric words to align, the heard words as timed lines.
+//! - [`lookalike`] — letters that only look Latin (a Cyrillic `е` in `mе`), made Latin.
 //! - [`lrc`] — reading and writing LRC.
 //! - [`refine`] — word starts corrected by forced alignment ([`ctc`]).
 //! - [`repeat`] — repeats the model missed (a chorus heard once), placed by matching the music.
@@ -22,6 +23,7 @@
 pub mod align;
 pub mod ctc;
 pub mod draft;
+pub mod lookalike;
 pub mod lrc;
 pub mod refine;
 pub mod repeat;
