@@ -60,6 +60,17 @@ anywhere in it.
   display until the next one. The selected line's words each have a handle, to time it word by
   word. Edges snap to the heard words (hold Alt to move freely); click to seek, drag the
   background to scroll, Ctrl+wheel to zoom.
+- **Time the rest** *(with auto-sync)*: in the editor, one button times every line and word
+  from what the speech engine heard, for lyrics you've fixed and timed only partly. Your own
+  line times are strong hints: they pick which chorus is which, they stay where the singing
+  roughly agrees, and they move only when the heard words clearly put the line elsewhere. Lines
+  it times by ear follow your own stamping (how far ahead of the voice you tap). Words are
+  sharpened by the forced aligner when it's on. The result is an ordinary edit, to check, undo
+  or save.
+- **Lookalike letters**: some lyrics, LRCLIB's included, carry Cyrillic or Greek letters drawn
+  like Latin ones (a Cyrillic `е` in "mе"), or invisible characters. They are made plain Latin
+  wherever lyrics are read or saved, so the words match what is sung. Real Cyrillic and Greek
+  lyrics are left as they are.
 - **Word-by-word lyrics**: where lyrics are timed word by word, from LRCLIB, a draft or the
   timeline, the playing line lights each word as it is sung. They are published to LRCLIB as a
   [Lyricsfile](https://github.com/tranxuanthang/lyricsfile), LRCLIB's format for word timing.

@@ -42,6 +42,7 @@ import {
   retext,
   stampStart,
   toTiming,
+  wordsOf,
   type Line,
   type Pos,
   type TimedLine,
@@ -115,6 +116,7 @@ const lyricsEl = $("lyrics");
 const bar = $("lyric-bar");
 const statusEl = $("lyric-bar-status");
 const timestampBtn = $<HTMLButtonElement>("lyric-timestamp");
+const autoTimeBtn = $<HTMLButtonElement>("lyric-autotime");
 const rewindBtn = $<HTMLButtonElement>("lyric-rewind");
 const autoCheckWrap = $("lyric-autocheck-wrap");
 const autoCheckBox = $<HTMLInputElement>("lyric-autocheck");
@@ -964,6 +966,76 @@ function rewind() {
 
 rewindBtn.addEventListener("click", rewind);
 
+// ---- timing by ear --------------------------------------------------------
+
+/// One line as `autosync_retime` gives it back (`autosync/retime.rs`).
+interface RetimedLine {
+  t: number | null;
+  how: "hint" | "moved" | "heard" | "placed" | "none";
+  words: number[] | null;
+}
+interface Retimed {
+  lines: RetimedLine[];
+  offset: number;
+  coverage: number;
+  sharpened: number | null;
+  unsharpenedWhy: string | null;
+}
+
+/// Time every line and word from what the speech engine heard. The times already set are
+/// strong hints: kept where the singing roughly agrees, moved where it clearly doesn't. The
+/// result is an ordinary edit: undo takes it back, and nothing is saved until Save.
+async function autoTime() {
+  if (busy || stamping || !ctx) return;
+  const before = JSON.stringify(lines);
+  setBusy(true);
+  setStatus("Timing every line and word from what the speech engine heard…");
+  try {
+    const r = await invoke<Retimed>("autosync_retime", {
+      ...keyArgs(),
+      duration: trackDuration(),
+      lines: lines.map((l) => ({ text: l.text, t: l.t })),
+    });
+    if (!ctx || !editing) return;
+    if (JSON.stringify(lines) !== before || r.lines.length !== lines.length) {
+      setStatus("The lyrics changed while they were being timed. Try again.", "err");
+      return;
+    }
+    recordEdit("autotime");
+    lines.forEach((line, i) => {
+      const got = r.lines[i];
+      // To the hundredth, as the LRC holds it, so the timing lines up with its stamps exactly.
+      line.t = got.t === null ? null : Math.round(got.t * 100) / 100;
+      if (got.words && got.words.length === wordsOf(line.text).length) line.words = got.words;
+      else delete line.words;
+    });
+    markDirty();
+    render();
+    settleHistory();
+    const count = (how: RetimedLine["how"]) => r.lines.filter((l) => l.how === how).length;
+    const moved = r.lines.flatMap((l, i) => (l.how === "moved" ? [i + 1] : []));
+    const parts = [
+      `Timed ${count("heard")} lines by ear`,
+      count("placed") ? `${count("placed")} between their neighbours` : "",
+      `kept ${count("hint")} of your times`,
+      moved.length
+        ? `moved ${moved.length} the singing put elsewhere (line ${moved.join(", ")})`
+        : "",
+    ].filter(Boolean);
+    const words =
+      r.sharpened !== null
+        ? `Words sharpened by the aligner on ${r.sharpened} lines.`
+        : `Words from the speech engine only (${r.unsharpenedWhy}).`;
+    setStatus(`${parts.join(", ")}. ${words} Check it, then save.`, "ok");
+  } catch (e) {
+    setStatus(String(e), "err");
+  } finally {
+    setBusy(false);
+  }
+}
+
+autoTimeBtn.addEventListener("click", () => void autoTime());
+
 function checkLine(i: number) {
   const t = lines[i].t;
   if (t === null || !ctx || !ctx.canTransport || stale) return;
@@ -1043,6 +1115,7 @@ function refreshBar() {
   // under the pointer; one that can't act right now is disabled, not hidden.
   timestampBtn.disabled = busy || stale || !ctx?.canTransport;
   rewindBtn.disabled = busy || stale || !ctx?.canTransport;
+  autoTimeBtn.disabled = busy || stamping;
   // Checking a line is only meaningful once something has a time, and auto-checking would
   // wreck a continuous pass.
   autoCheckBox.disabled = stamping || !timed;

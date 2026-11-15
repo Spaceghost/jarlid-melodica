@@ -15,6 +15,7 @@
 //! - [`lookalike`] — letters that only look Latin (a Cyrillic `е` in `mе`), made Latin.
 //! - [`lrc`] — reading and writing LRC.
 //! - [`refine`] — word starts corrected by forced alignment ([`ctc`]).
+//! - [`retime`] — every line of a listener's lyrics timed, their own times taken as strong hints.
 //! - [`repeat`] — repeats the model missed (a chorus heard once), placed by matching the music.
 //! - [`score`] — how close a result is to a known-good synced copy.
 //! - [`window`] — cutting a track into overlapping windows for the model, and stitching back.
@@ -27,6 +28,7 @@ pub mod lookalike;
 pub mod lrc;
 pub mod refine;
 pub mod repeat;
+pub mod retime;
 pub mod score;
 pub mod text;
 pub mod window;

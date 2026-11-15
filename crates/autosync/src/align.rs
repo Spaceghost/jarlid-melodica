@@ -29,7 +29,7 @@ use crate::Heard;
 pub const VERSION: u32 = 3;
 
 /// Fallback seconds-per-word, when too few words matched to measure it.
-const DEFAULT_WORD_SECONDS: f64 = 0.35;
+pub(crate) const DEFAULT_WORD_SECONDS: f64 = 0.35;
 
 /// Slack, seconds, added to the room in every silence: heard word times are good to about a
 /// tenth of a second, and a short word can hide between two heard back to back. 0 and 0.5 both
@@ -112,11 +112,16 @@ pub struct Alignment {
     pub line_seconds: Option<f64>,
 }
 
+/// What a match outside the span a word was expected in costs, per second outside it.
+const OUTSIDE_COST: f64 = 0.5;
+/// The most it costs: a perfect match (1.5) still beats leaving both words unmatched.
+const OUTSIDE_MAX: f64 = 1.2;
+
 /// Pause assumed between lines when spacing out lines nothing anchors.
 const LINE_GAP: f64 = 0.5;
 
 /// Seconds from the start of `line` to the next line's, for placing lines nothing anchored.
-fn step(line_seconds: Option<f64>, word_seconds: f64, line: &LineTime) -> f64 {
+pub(crate) fn step(line_seconds: Option<f64>, word_seconds: f64, line: &LineTime) -> f64 {
     line_seconds.unwrap_or(line.words as f64 * word_seconds + LINE_GAP)
 }
 
@@ -250,7 +255,7 @@ pub fn align_with(lines: &[&str], heard: &[Heard], params: &Params) -> Alignment
     }
     let heard_words: Vec<String> = heard.iter().map(|h| words(&h.text).concat()).collect();
 
-    let pairs = match_words(&lyric, heard, &heard_words, params);
+    let pairs = match_words(&lyric, heard, &heard_words, &[], params);
     let matched_words = pairs.iter().filter(|p| p.is_some()).count();
 
     // Seconds per word, measured from consecutive matched words, so lines can be extrapolated
@@ -328,10 +333,16 @@ pub fn align_with(lines: &[&str], heard: &[Heard], params: &Params) -> Alignment
 /// placed in a silence too short to sing them in pays [`Params::crowding`] for every word that
 /// doesn't fit. That is what stops one heard "I want … like this" being split across two copies
 /// of the line with thirty words between them.
-fn match_words(
+///
+/// `expected`, when not empty, is a span per lyric word that it is expected to be heard in (a
+/// listener's line times, see [`crate::retime`]): a match outside it costs [`OUTSIDE_COST`] a
+/// second, up to [`OUTSIDE_MAX`]. Not forbidden: a hint can be wrong, and enough evidence
+/// against it still wins.
+pub(crate) fn match_words(
     lyric: &[(usize, String)],
     heard: &[Heard],
     heard_words: &[String],
+    expected: &[Option<(f64, f64)>],
     params: &Params,
 ) -> Vec<Option<usize>> {
     let (n, m) = (lyric.len(), heard.len());
@@ -366,7 +377,11 @@ fn match_words(
     let pair = |i: usize, j: usize| {
         let s = similarity(&lyric[i].1, &heard_words[j]);
         if s >= params.match_sim {
-            2.0 * s - 0.5
+            let outside = match expected.get(i).copied().flatten() {
+                Some((lo, hi)) => (lo - heard[j].start).max(heard[j].start - hi).max(0.0),
+                None => 0.0,
+            };
+            2.0 * s - 0.5 - (outside * OUTSIDE_COST).min(OUTSIDE_MAX)
         } else {
             params.mismatch
         }
@@ -505,7 +520,7 @@ fn match_words(
 /// Alignment keeps matched words in order, but stepping back over unmatched first words can
 /// overshoot the previous line. The later evidence wins; the overshooting line is re-derived by
 /// interpolation.
-fn enforce_order(lines: &mut [LineTime]) {
+pub(crate) fn enforce_order(lines: &mut [LineTime]) {
     let mut latest = f64::NEG_INFINITY;
     for line in lines.iter_mut() {
         if let Some(t) = line.t {
@@ -523,7 +538,7 @@ fn enforce_order(lines: &mut [LineTime]) {
 ///
 /// Song lines land on bars, so the gap from one line to the next stays much the same whatever
 /// the words: "Hip-hip" takes a bar as surely as "We'll be playing and having fun" does.
-fn line_pace(lines: &[LineTime]) -> Option<f64> {
+pub(crate) fn line_pace(lines: &[LineTime]) -> Option<f64> {
     let sung: Vec<&LineTime> = lines.iter().filter(|l| l.words > 0).collect();
     let mut gaps: Vec<f64> = sung
         .windows(2)
@@ -545,7 +560,7 @@ fn line_pace(lines: &[LineTime]) -> Option<f64> {
 /// it the same way, and whole stanzas between the two go in the middle of the time left, since
 /// nothing says which side of them the break fell. Lines that don't fit like that are spread
 /// evenly too.
-fn interpolate(lines: &mut [LineTime], step: impl Fn(&LineTime) -> f64) {
+pub(crate) fn interpolate(lines: &mut [LineTime], step: impl Fn(&LineTime) -> f64) {
     let anchors: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].t.is_some()).collect();
     for pair in anchors.windows(2) {
         let (a, b) = (pair[0], pair[1]);
@@ -618,7 +633,7 @@ fn interpolate(lines: &mut [LineTime], step: impl Fn(&LineTime) -> f64) {
     }
 }
 
-fn median(values: &mut [f64]) -> Option<f64> {
+pub(crate) fn median(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }

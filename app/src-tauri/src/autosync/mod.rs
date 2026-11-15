@@ -17,6 +17,7 @@
 //! instead, and lines appear as each window is heard.
 
 mod component;
+pub mod retime;
 mod sidecar;
 
 use std::collections::HashMap;
