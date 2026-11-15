@@ -88,14 +88,15 @@ automatically from speech/word detection, written into the edit where he can rev
   disk, original kept as `lyrics-overrides\f6c2a6bacfd3161a.json.before-lookalike-fold.bak`.
 - [x] Line pass, command, editor button, README (`e7a2951`). Crate tests 64 pass, app tests 141
   pass, `tsc` clean, bun tests 103 pass.
-- [ ] **Not exercised in the app**: the button, the sidecar emission path and the editor
-  apply. Needs a build with these commits (dev run or a release; Cameron's call).
-- [ ] Cameron runs "Time the rest" on nice guys, checks by ear, saves.
+- [x] Released as [v1.26.0](https://github.com/cinderblock/jarlid/releases/tag/v1.26.0)
+  (Cameron: "Release", 2026-11-15), 3:16 PM PST (23:16Z). Run 43773403522 `success`; setup
+  `.exe`, `.sig` and `latest.json` attached; marked Latest.
+- [ ] **Not exercised in the app yet**: the button, the sidecar emission path and the editor
+  apply. Cameron runs "Time the rest" on nice guys, checks by ear, saves.
 
 ## Open questions for the user
 
-1. How do you want to try it: a dev build (`bun run tauri dev` in `app/`), or a release?
-   (A release only on your say-so.)
+(none)
 
 ## Follow-ups (not started)
 
