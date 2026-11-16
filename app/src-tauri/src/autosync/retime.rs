@@ -257,7 +257,7 @@ async fn audio_for(app: &AppHandle, key: &str) -> Option<(String, String)> {
             return Some((t.pandora_id, src));
         }
     }
-    engine.all_saved_songs().await.into_iter().find_map(|l| {
+    engine.all_saved_songs().into_iter().find_map(|l| {
         let s = l.song;
         let k = crate::lyrics::key_for(&s.artist, &s.title, Some(&s.album));
         (k == key)

@@ -145,6 +145,7 @@ fn saved_song_json(listed: engine::cache::Listed) -> serde_json::Value {
         "length": song.length,
         "art": art(130),
         "thumbUp": song.rating > 0,
+        "trackToken": song.track_token,
         "playedAt": played,
         "stations": song.stations,
     })
@@ -178,9 +179,39 @@ pub async fn saved_index(
     if !crate::settings::get(&app).audio_cache.enabled {
         return Ok(json!({ "enabled": false, "songs": [] }));
     }
-    let songs = state.get().await?.all_saved_songs().await;
-    let songs: Vec<_> = songs.into_iter().map(saved_song_json).collect();
+    let engine = state.get().await?;
+    // Off the async runtime: the first listing reads every sidecar from disk, which takes
+    // seconds when they are not in the file cache.
+    let songs = tokio::task::spawn_blocking(move || {
+        engine
+            .all_saved_songs()
+            .into_iter()
+            .map(saved_song_json)
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(json!({ "enabled": true, "songs": songs }))
+}
+
+/// Rate a track that is not necessarily playing: thumbs on the play history's card.
+///
+/// `station_token` and `track_token` are what the history recorded when the song played, or what
+/// its saved sidecar kept. Whether Pandora still takes a track token from an earlier session is
+/// not known, so a refusal is passed back for the card to show.
+#[tauri::command]
+pub async fn native_rate(
+    state: tauri::State<'_, NativeEngine>,
+    station_token: String,
+    track_token: String,
+    positive: bool,
+) -> Result<(), String> {
+    state
+        .get()
+        .await?
+        .rate_track(&station_token, &track_token, positive)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Jump to a saved song. The station carries on afterwards.
@@ -444,6 +475,9 @@ async fn attach(
                         // `station-active` event says the same, but it is sent once a switch has
                         // returned, which can be after this track's event.
                         let station_token = engine.station_token().await.unwrap_or_default();
+                        // Where a thumb on this track goes, and the token it is given with, so
+                        // the history can rate it after it has stopped playing.
+                        let thumb_station = engine.thumb_target().await.unwrap_or_default();
 
                         emit_state(
                             &app,
@@ -457,6 +491,8 @@ async fn attach(
                                 "album": track.album_title,
                                 "station": station,
                                 "stationToken": station_token,
+                                "trackToken": track.track_token,
+                                "thumbStation": thumb_station,
                                 "sourceStation": source,
                                 "art": art(1080),
                                 "artFallback": art(500),

@@ -618,6 +618,7 @@ pub fn run() {
             native::audio_cache_clear,
             native::saved_songs,
             native::saved_index,
+            native::native_rate,
             native::native_play_saved,
             native::native_set_output,
             native::native_output_device,

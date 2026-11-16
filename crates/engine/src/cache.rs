@@ -12,7 +12,9 @@
 //! That costs no extra bandwidth on a first play, because one complete download replaces the
 //! stream it would otherwise have been. See `plans/audio-track-cache.md`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 /// Where the cache lives and how big it may get.
@@ -228,16 +230,67 @@ pub fn saved_songs(dir: &Path, station: &str) -> Vec<Listed> {
     songs
 }
 
+/// A sidecar as last read: its modified time and size then, and what it said.
+type Memo = HashMap<PathBuf, (SystemTime, u64, SavedSong)>;
+
+/// Sidecars already parsed, so listing the saved songs reads only the ones that are new or have
+/// changed since.
+///
+/// Reading every sidecar on every call was what made the play history's card slow to offer
+/// "Play again": a few hundred small files, each opened and scanned by the antivirus, took
+/// seconds when they were not in the file cache. The directory listing that finds them already
+/// says when each was last written, so an unchanged sidecar costs nothing.
+static SIDECARS: Mutex<Option<Memo>> = Mutex::new(None);
+
 /// Every saved song with a sidecar, on any station, most recently played first.
 pub fn all_saved(dir: &Path) -> Vec<Listed> {
-    let mut songs: Vec<Listed> = entries(dir)
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    // One pass over the directory: the songs, and every sidecar's stamp.
+    let mut audio = Vec::new();
+    let mut stamps: HashMap<PathBuf, (SystemTime, u64)> = HashMap::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        if ext == SIDECAR {
+            stamps.insert(path, (modified, meta.len()));
+        } else if EXTENSIONS.contains(&ext) {
+            audio.push((path, modified));
+        }
+    }
+
+    let mut memo = SIDECARS.lock().unwrap_or_else(|e| e.into_inner());
+    let memo = memo.get_or_insert_with(HashMap::new);
+    let mut songs: Vec<Listed> = audio
         .into_iter()
-        .filter_map(|(path, _, played)| {
-            let bytes = std::fs::read(path.with_extension(SIDECAR)).ok()?;
+        .filter_map(|(path, played)| {
+            let sidecar = path.with_extension(SIDECAR);
+            let &(modified, len) = stamps.get(&sidecar)?;
+            if let Some((m, l, song)) = memo.get(&sidecar) {
+                if *m == modified && *l == len {
+                    return Some(Listed {
+                        song: song.clone(),
+                        played,
+                    });
+                }
+            }
+            let bytes = std::fs::read(&sidecar).ok()?;
             let song: SavedSong = serde_json::from_slice(&bytes).ok()?;
+            memo.insert(sidecar, (modified, len, song.clone()));
             Some(Listed { song, played })
         })
         .collect();
+    // Forget sidecars that are gone, so the memo can't outgrow the cache. Only this directory's:
+    // the memo is shared by every directory listed (the tests use many).
+    memo.retain(|path, _| path.parent() != Some(dir) || stamps.contains_key(path));
     songs.sort_by(|a, b| b.played.cmp(&a.played));
     songs
 }
@@ -656,6 +709,28 @@ mod tests {
             ["ST:1", "ST:2"],
             "a second station is added, not swapped in"
         );
+    }
+
+    #[test]
+    fn listing_again_sees_a_sidecar_that_changed_or_went() {
+        let dir = scratch("memo");
+        put(&dir, "TR:a", "mp3", 100, 0);
+        put(&dir, "TR:b", "mp3", 100, 0);
+        remember(&dir, &track("TR:a", "A"), "ST:1");
+        remember(&dir, &track("TR:b", "B"), "ST:1");
+        assert_eq!(all_saved(&dir).len(), 2);
+
+        // A changed sidecar is read again, though the song's file is untouched.
+        remember(&dir, &track("TR:a", "A"), "ST:2");
+        let a = all_saved(&dir)
+            .into_iter()
+            .find(|l| l.song.id == "TR:a")
+            .unwrap();
+        assert_eq!(a.song.stations, ["ST:1", "ST:2"]);
+
+        // A sidecar that is gone takes its song off the list.
+        std::fs::remove_file(sidecar(&dir, "TR:b").unwrap()).unwrap();
+        assert_eq!(titles(all_saved(&dir)), ["A"]);
     }
 
     #[test]

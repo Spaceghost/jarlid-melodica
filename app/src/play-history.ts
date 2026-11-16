@@ -21,7 +21,18 @@ export interface HistItem {
   /** The station it played on: its tuner token, and its name at the time. */
   station?: string;
   stationName?: string;
+  /**
+   * What thumbs on it need, kept so it can be rated after it has stopped playing: Pandora's
+   * token for this play of the track, and the station a thumb goes to (not always `station`:
+   * a saved song played here is rated on the station it was saved on). Absent before v1.28.
+   */
+  trackToken?: string;
+  thumbStation?: string;
+  /** The thumb it has, as Pandora said when it played or as given since. */
+  rating?: Rating;
 }
+
+export type Rating = "up" | "down";
 
 /** As the `saved_index` command describes a saved song. */
 export interface IndexedSong {
@@ -30,6 +41,10 @@ export interface IndexedSong {
   artist: string;
   /** Tuner tokens of the stations it was saved on. */
   stations: string[];
+  /** Pandora's token from when it was last served, for thumbs. */
+  trackToken?: string;
+  /** Thumbed up when it was last served. */
+  thumbUp?: boolean;
 }
 
 export interface Station {
@@ -44,6 +59,41 @@ export interface Station {
 export const HISTORY_LENGTH = 1000;
 /** Covers the strip draws at a time: at first, then again each time its old end nears. */
 export const STRIP_CHUNK = 40;
+
+/** The saved song `h` is, if it is saved. By id when it has one, else by name. */
+export function savedSong(h: HistItem, songs: IndexedSong[]): IndexedSong | undefined {
+  if (h.id) return songs.find((s) => s.id === h.id);
+  const title = fold(h.title);
+  const artist = fold(h.artist);
+  return songs.find((s) => fold(s.title) === title && fold(s.artist) === artist);
+}
+
+/** Where a thumb on a history entry goes, and what it has now. */
+export interface ThumbTarget {
+  station: string;
+  trackToken: string;
+  rating?: Rating;
+}
+
+/**
+ * How to rate `h`, or `null` when it can't be.
+ *
+ * What it recorded when it played comes first. An entry from before that was recorded can
+ * still be rated if its song is saved, with the token kept beside the saved song, on the
+ * station it played on if the song was saved there, else the first one it was saved on.
+ */
+export function thumbTarget(h: HistItem, songs: IndexedSong[] | undefined): ThumbTarget | null {
+  const station = h.thumbStation || h.station;
+  if (h.trackToken && station) return { station, trackToken: h.trackToken, rating: h.rating };
+  const song = songs && savedSong(h, songs);
+  if (!song?.trackToken || !song.stations.length) return null;
+  const on = h.station && song.stations.includes(h.station) ? h.station : song.stations[0];
+  return {
+    station: on,
+    trackToken: song.trackToken,
+    rating: h.rating ?? (song.thumbUp ? "up" : undefined),
+  };
+}
 
 /** The same song as the newest entry, so a resumed track is not recorded twice. */
 export function isRepeat(history: HistItem[], next: HistItem): boolean {
@@ -102,11 +152,7 @@ export function playability(
   stations: Station[]
 ): Playability {
   if (!index.enabled) return { kind: "off" };
-  const title = fold(h.title);
-  const artist = fold(h.artist);
-  const song = h.id
-    ? index.songs.find((s) => s.id === h.id)
-    : index.songs.find((s) => fold(s.title) === title && fold(s.artist) === artist);
+  const song = savedSong(h, index.songs);
   if (!song || !song.stations.length) return { kind: "unsaved" };
 
   const known = (token: string) => !stations.length || stations.some((s) => s.token === token);

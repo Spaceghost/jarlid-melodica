@@ -25,10 +25,12 @@ import {
   parse as parseHistory,
   playability,
   pushed,
+  thumbTarget,
   whyNot,
   type HistItem,
   type IndexedSong,
   type Playability,
+  type Rating,
 } from "./play-history";
 
 // ---- types -------------------------------------------------------------
@@ -47,6 +49,9 @@ interface NowPlaying {
   artFallback: string;
   thumbUp: boolean;
   thumbDown: boolean;
+  /// For thumbs after it stops playing: this play's token, and the station a thumb goes to.
+  trackToken?: string;
+  thumbStation?: string;
 }
 interface Playhead {
   position: number;
@@ -603,6 +608,8 @@ async function onNowPlaying(np: NowPlaying) {
     refreshPublishChip();
     lyricFlags.trackChanged();
     pushHistory(np, prevKey);
+    // Keep the saved index fresh for the history's card, out of the way of the song starting.
+    setTimeout(() => void refreshSavedIndex(), 3000);
     await loadLyrics(np);
   }
 }
@@ -652,10 +659,120 @@ const hmPlay = $<HTMLButtonElement>("hm-play");
 const hmPlayLabel = $("hm-play-label");
 const hmSwitch = $<HTMLButtonElement>("hm-switch");
 const hmWhy = $("hm-why");
+const hmUp = $<HTMLButtonElement>("hm-up");
+const hmDown = $<HTMLButtonElement>("hm-down");
 /** What the card's Play button does, once the saved index has answered. */
 let hmVerdict: Playability | null = null;
 /** Which opening of the card an answer from Rust belongs to. */
 let hmToken = 0;
+/** The entry the card is showing. */
+let hmItem: HistItem | null = null;
+
+type SavedIndex = { enabled: boolean; songs: IndexedSong[] };
+/**
+ * The saved songs as last listed, so the card can say at once whether a song plays again.
+ *
+ * Asking Rust when the card opened was what made "Play again" late, or missing when the card
+ * was closed before the answer came: the first listing reads every saved song's details from
+ * disk. It is now fetched in the background as each song starts, and the card judges from the
+ * last one and corrects itself if a fresh one differs.
+ */
+let savedIndex: SavedIndex | null = null;
+let savedIndexPending: Promise<SavedIndex | null> | null = null;
+
+/** Fetch the saved index again; one request at a time. `null` when signed out. */
+function refreshSavedIndex(): Promise<SavedIndex | null> {
+  savedIndexPending ??= invoke<SavedIndex>("saved_index")
+    .then((index) => (savedIndex = index))
+    .catch(() => null)
+    .finally(() => (savedIndexPending = null));
+  return savedIndexPending;
+}
+
+/** Whether `h` is the song playing now, on this computer. */
+const isPlayingNow = (h: HistItem) =>
+  h === history[0] && topIsPlaying && currentKey === `${h.title}|${h.artist}`;
+
+/** Show `h`'s thumbs, or hide them when it can't be rated. */
+function renderCardThumbs(h: HistItem) {
+  let rating: Rating | undefined;
+  let show = !remoteMode;
+  if (isPlayingNow(h)) {
+    rating = thumbUpBtn.classList.contains("active")
+      ? "up"
+      : thumbDownBtn.classList.contains("active")
+        ? "down"
+        : undefined;
+  } else {
+    const t = thumbTarget(h, savedIndex?.enabled ? savedIndex.songs : undefined);
+    show &&= !!t;
+    rating = t?.rating;
+  }
+  hmUp.hidden = hmDown.hidden = !show;
+  hmUp.classList.toggle("active", rating === "up");
+  hmDown.classList.toggle("active", rating === "down");
+  hmUp.setAttribute("aria-pressed", String(rating === "up"));
+  hmDown.setAttribute("aria-pressed", String(rating === "down"));
+}
+
+/** Judge the card's Play button from `index`. */
+function renderCardPlay(h: HistItem, index: SavedIndex) {
+  hmPlay.hidden = true;
+  hmSwitch.hidden = true;
+  hmWhy.textContent = "";
+  hmVerdict = null;
+  const p = playability(h, index, activeToken, stationList);
+  if (p.kind === "play") {
+    hmVerdict = p;
+    // Saved on another station: play it here, or go to that station. Either way its thumbs
+    // go to the station it was saved on.
+    hmPlayLabel.textContent = p.switches ? "Play here" : "Play again";
+    hmPlay.hidden = false;
+    hmSwitch.textContent = `Play on ${p.station.name || "its station"}`;
+    hmSwitch.hidden = !p.switches;
+  } else {
+    hmWhy.textContent = whyNot(p);
+  }
+}
+
+/**
+ * Thumb the card's song. The song playing now goes through the transport's own thumbs (which
+ * move on after a thumbs down); any other is rated on the station it played on, and nothing is
+ * skipped.
+ */
+async function rateCard(r: Rating) {
+  const h = hmItem;
+  if (!h) return;
+  if (isPlayingNow(h)) {
+    // A thumbs down moves on to the next song, so the card for this one closes.
+    if (r === "down") histModal.hidden = true;
+    cmd(r === "up" ? "thumbUp" : "thumbDown");
+    return;
+  }
+  const t = thumbTarget(h, savedIndex?.enabled ? savedIndex.songs : undefined);
+  if (!t) return;
+  const before = h.rating;
+  // Optimistic, like the transport's: shown at once, put back if Pandora refuses it.
+  h.rating = r;
+  renderCardThumbs(h);
+  hmWhy.textContent = "";
+  try {
+    await invoke("native_rate", {
+      stationToken: t.station,
+      trackToken: t.trackToken,
+      positive: r === "up",
+    });
+    saveHistory();
+  } catch (e) {
+    h.rating = before;
+    if (hmItem === h && !histModal.hidden) {
+      renderCardThumbs(h);
+      hmWhy.textContent = `Pandora didn't take the thumb: ${String(e)}`;
+    }
+  }
+}
+hmUp.addEventListener("click", () => void rateCard("up"));
+hmDown.addEventListener("click", () => void rateCard("down"));
 
 function openHistModal(h: HistItem) {
   hmArt.src = h.art;
@@ -670,6 +787,8 @@ function openHistModal(h: HistItem) {
   hmSwitch.hidden = true;
   hmWhy.textContent = "";
   hmVerdict = null;
+  hmItem = h;
+  renderCardThumbs(h);
   histModal.hidden = false;
 
   const token = ++hmToken;
@@ -677,31 +796,19 @@ function openHistModal(h: HistItem) {
     hmWhy.textContent = "Playing on the speakers: songs play again only on this computer.";
     return;
   }
-  if (h === history[0] && currentKey === `${h.title}|${h.artist}`) {
+  if (isPlayingNow(h)) {
     hmWhy.textContent = "Playing now.";
     return;
   }
-  invoke<{ enabled: boolean; songs: IndexedSong[] }>("saved_index")
-    .then((index) => {
-      if (token !== hmToken || histModal.hidden) return;
-      const p = playability(h, index, activeToken, stationList);
-      if (p.kind === "play") {
-        hmVerdict = p;
-        // Saved on another station: play it here, or go to that station. Either way its thumbs
-        // go to the station it was saved on.
-        hmPlayLabel.textContent = p.switches ? "Play here" : "Play again";
-        hmPlay.hidden = false;
-        hmSwitch.textContent = `Play on ${p.station.name || "its station"}`;
-        hmSwitch.hidden = !p.switches;
-      } else if (p.kind === "off") {
-        hmWhy.textContent = "Saved songs is off in Settings, so songs can't be played again.";
-      } else {
-        hmWhy.textContent = whyNot(p);
-      }
-    })
-    .catch(() => {
-      // Not signed in: there is nothing to play it on, and nothing to explain.
-    });
+  // Judged at once from the index already in hand, then again from a fresh one: a song saved or
+  // evicted since shows up, and the first card after launch still gets its answer.
+  if (savedIndex) renderCardPlay(h, savedIndex);
+  void refreshSavedIndex().then((index) => {
+    // Not signed in: there is nothing to play it on, and nothing to explain.
+    if (!index || token !== hmToken || histModal.hidden) return;
+    renderCardPlay(h, index);
+    renderCardThumbs(h);
+  });
 }
 /**
  * Play the card's song. `here` keeps the station playing (and its queue), with the song's
@@ -947,11 +1054,22 @@ function pushHistory(np: NowPlaying, prevKey: string) {
     id: np.id || undefined,
     station: np.stationToken || undefined,
     stationName: np.station || undefined,
+    trackToken: np.trackToken || undefined,
+    thumbStation: np.thumbStation || undefined,
+    rating: np.thumbUp ? "up" : undefined,
   };
   const next = pushed(history, entry, HISTORY_LENGTH);
   // The song playing is already the newest entry: resumed, or back from the speakers. The
   // strip shows only what is not playing, so if it had been put there, it comes back off.
   if (next === history) {
+    // This play's token is the one to rate it with from now on, and the rating is Pandora's.
+    const top = history[0];
+    if (entry.trackToken) {
+      top.trackToken = entry.trackToken;
+      top.thumbStation = entry.thumbStation;
+      top.rating = entry.rating;
+      saveHistory();
+    }
     if (!topIsPlaying) {
       topIsPlaying = true;
       dropNewestCover();
@@ -2900,9 +3018,19 @@ setInterval(() => {
 onState<NowPlaying>("engine://nowplaying", (np) => void onNowPlaying(np));
 listen<Playhead>("engine://playhead", (e) => onPlayhead(e.payload));
 listen<Technical>("engine://technical", (e) => renderTechnical(e.payload));
-onState<{ thumbUp: boolean; thumbDown: boolean }>("engine://thumbs", (p) =>
-  setThumbs(p.thumbUp, p.thumbDown)
-);
+onState<{ thumbUp: boolean; thumbDown: boolean }>("engine://thumbs", (p) => {
+  setThumbs(p.thumbUp, p.thumbDown);
+  // The song playing is the newest entry: remember its thumb for its cover on the strip later.
+  const top = history[0];
+  if (top && topIsPlaying && currentKey === `${top.title}|${top.artist}`) {
+    const rating: Rating | undefined = p.thumbUp ? "up" : p.thumbDown ? "down" : undefined;
+    if (top.rating !== rating) {
+      top.rating = rating;
+      saveHistory();
+    }
+    if (hmItem === top && !histModal.hidden) renderCardThumbs(top);
+  }
+});
 
 // Every state listener is registered above this point. Catch up on whatever was sent before
 // they were, in the order they were registered: the station before the station list, which

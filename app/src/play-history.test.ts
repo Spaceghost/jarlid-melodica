@@ -1,6 +1,14 @@
 // Run with `bun test`.
 import { describe, expect, test } from "bun:test";
-import { parse, playability, pushed, whyNot, type HistItem, type IndexedSong } from "./play-history";
+import {
+  parse,
+  playability,
+  pushed,
+  thumbTarget,
+  whyNot,
+  type HistItem,
+  type IndexedSong,
+} from "./play-history";
 
 const item = (title: string, extra: Partial<HistItem> = {}): HistItem => ({
   art: "",
@@ -107,5 +115,37 @@ describe("whyNot", () => {
     expect(whyNot({ kind: "unsaved" })).toStartWith("Not saved on this computer");
     expect(whyNot({ kind: "gone" })).toStartWith("Its station was deleted");
     expect(whyNot({ kind: "off" })).toStartWith("Saved songs is off");
+  });
+});
+
+describe("thumbTarget", () => {
+  test("what it recorded when it played comes first", () => {
+    const h = item("a", { id: "TR:a", station: "ST:Q", thumbStation: "ST:2", trackToken: "t1", rating: "up" });
+    const song = { ...saved("TR:a", "a", ["ST:1"]), trackToken: "old" };
+    expect(thumbTarget(h, [song])).toEqual({ station: "ST:2", trackToken: "t1", rating: "up" });
+  });
+
+  test("falls back to the station it played on when no thumb station was recorded", () => {
+    expect(thumbTarget(item("a", { station: "ST:1", trackToken: "t1" }), undefined)).toEqual({
+      station: "ST:1",
+      trackToken: "t1",
+      rating: undefined,
+    });
+  });
+
+  test("an old entry is rated through its saved song, on a station it was saved on", () => {
+    const song = { ...saved("TR:a", "a", ["ST:1", "ST:2"]), trackToken: "tok", thumbUp: true };
+    expect(thumbTarget(item("a", { id: "TR:a", station: "ST:2" }), [song])).toEqual({
+      station: "ST:2",
+      trackToken: "tok",
+      rating: "up",
+    });
+    expect(thumbTarget(item("a", { id: "TR:a", station: "ST:9" }), [song])?.station).toBe("ST:1");
+  });
+
+  test("null when there is nothing to rate it with", () => {
+    expect(thumbTarget(item("a", { id: "TR:a", station: "ST:1" }), [])).toBeNull();
+    expect(thumbTarget(item("a", { id: "TR:a" }), undefined)).toBeNull();
+    expect(thumbTarget(item("a", { id: "TR:a" }), [saved("TR:a", "a", ["ST:1"])])).toBeNull();
   });
 });

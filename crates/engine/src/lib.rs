@@ -615,7 +615,7 @@ impl Engine {
 
     /// Every saved song on any station, most recently played first. Empty when the cache is
     /// off. For matching the play history against what is on disk.
-    pub async fn all_saved_songs(&self) -> Vec<cache::Listed> {
+    pub fn all_saved_songs(&self) -> Vec<cache::Listed> {
         match self.cache_config() {
             Some(config) => cache::all_saved(&config.dir),
             None => Vec::new(),
@@ -1107,6 +1107,28 @@ impl Engine {
                 .client
                 .thumb_down(&station, &track.track_token)
                 .await?;
+        }
+        Ok(())
+    }
+
+    /// The station a thumb on the track playing now goes to. For the play history, which keeps
+    /// it so a song can be rated later, after it has stopped playing.
+    pub async fn thumb_target(&self) -> Option<String> {
+        let state = self.state.lock().await;
+        thumb_station(state.current.as_ref(), state.station_token.as_deref())
+    }
+
+    /// Rate any track, not only the one playing: `track_token` on `station`. For the play
+    /// history. Nothing is skipped, since the track is not playing.
+    pub async fn rate_track(&self, station: &str, track_token: &str, positive: bool) -> Result<()> {
+        if station.is_empty() || track_token.is_empty() {
+            return Err(Error::NoStation);
+        }
+        let mut state = self.state.lock().await;
+        if positive {
+            state.client.thumb_up(station, track_token).await?;
+        } else {
+            state.client.thumb_down(station, track_token).await?;
         }
         Ok(())
     }
