@@ -69,6 +69,9 @@ panel, which he found hard to read and use, and a little laggy. Follow-up, the s
 - [x] Frontend: sublines, drag + snap, BPM in bar; Timeline panel draws the vocal band too
   and its starts snap to vocal onsets. `tsc` clean, bun 103 pass.
 - [x] README.
+- [x] Released as [v1.27.0](https://github.com/cinderblock/jarlid/releases/tag/v1.27.0)
+  (Cameron: "release a minor version", 2026-11-15). Bump `aae980d`; run 43793520752
+  `success` at 6:48 PM PST (02:48Z); setup `.exe`, `.sig` and `latest.json` attached; Latest.
 - [ ] **Cameron tries it in the real app** (dev build: `bun run tauri dev` in `app/`). Not
   exercised in a running app yet: the layout of the strips, the drag, the playhead.
 
