@@ -12,7 +12,7 @@
 // while the song plays, are more than DOM rows would take gracefully. Everything it changes
 // goes through the pure edits in edit-lines.ts. See plans/lyrics-timeline.md.
 
-import { invoke } from "@tauri-apps/api/core";
+import { fetchSong, rangeOf, type Envelope, type HeardWord } from "./lyric-sublines";
 import {
   endsInPause,
   isBlank,
@@ -42,19 +42,6 @@ export interface TimelineHost {
   seek(t: number): void;
 }
 
-interface Envelope {
-  title: string;
-  artist: string;
-  rate: number;
-  levels: number[];
-}
-interface HeardWord {
-  text: string;
-  start: number;
-  end: number;
-  p: number;
-}
-
 const panel = document.getElementById("lyric-timeline") as HTMLElement;
 const canvas = document.getElementById("lyric-timeline-canvas") as HTMLCanvasElement;
 const g = canvas.getContext("2d")!;
@@ -70,7 +57,8 @@ const LANES = {
 const HEIGHT = 168;
 /// How near an edge counts as grabbing it.
 const GRAB = 6;
-/// How near a heard word's edge a dragged edge snaps to it. Alt turns snapping off.
+/// How near a heard word's edge (or, for a start, a vocal onset) a dragged edge snaps to it.
+/// Alt turns snapping off.
 const SNAP = 8;
 /// Where the playhead sits while following, as a share of the width.
 const FOLLOW_AT = 0.25;
@@ -122,14 +110,7 @@ export function close() {
 async function load(h: TimelineHost) {
   const meta = h.meta();
   try {
-    const [e, words] = await Promise.all([
-      invoke<Envelope>("track_envelope"),
-      invoke<HeardWord[]>("heard_words", {
-        artist: meta.artist,
-        track: meta.title,
-        album: meta.album || null,
-      }),
-    ]);
+    const [e, words] = await fetchSong(meta);
     if (host !== h) return;
     heard = words;
     if (e.title !== meta.title || e.artist !== meta.artist) {
@@ -137,12 +118,7 @@ async function load(h: TimelineHost) {
       return;
     }
     env = e;
-    // Songs are mastered loud: stretch each one's own range to the lane, from its quiet
-    // tenth up, or every bar is the same height.
-    const sorted = [...e.levels].sort((a, b) => a - b);
-    const lo = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
-    const hi = sorted[sorted.length - 1] ?? 255;
-    levelRange = [lo, Math.max(hi, lo + 1)];
+    levelRange = rangeOf(wave());
     status = "";
   } catch (err) {
     if (host === h) status = `No waveform: ${err}`;
@@ -161,6 +137,9 @@ function resize() {
 new ResizeObserver(() => {
   if (isOpen()) resize();
 }).observe(panel);
+
+/// The vocal range's loudness (the drums filtered out), or the whole mix's from an older backend.
+const wave = () => (env?.voice.length ? env.voice : (env?.levels ?? []));
 
 const xOf = (t: number) => (t - viewStart) * pps;
 const tOf = (x: number) => viewStart + x / pps;
@@ -241,14 +220,15 @@ function drawWave(c: Record<string, string>) {
   const mid = (top + bottom) / 2;
   const half = (bottom - top) / 2;
   const [lo, hi] = levelRange;
+  const levels = wave();
   g.fillStyle = c.faint;
   for (let x = 0; x < width; x++) {
     // The loudest moment under this pixel, so a short hit isn't averaged away.
     const a = Math.max(0, Math.floor(tOf(x) * env.rate));
-    const b = Math.min(env.levels.length, Math.max(a + 1, Math.floor(tOf(x + 1) * env.rate)));
-    if (a >= env.levels.length) break;
+    const b = Math.min(levels.length, Math.max(a + 1, Math.floor(tOf(x + 1) * env.rate)));
+    if (a >= levels.length) break;
     let v = 0;
-    for (let i = a; i < b; i++) v = Math.max(v, env.levels[i]);
+    for (let i = a; i < b; i++) v = Math.max(v, levels[i]);
     const h = Math.max(0.5, ((v - lo) / (hi - lo)) * half);
     if (v <= lo) continue;
     g.fillRect(x, mid - h, 1, h * 2);
@@ -405,16 +385,18 @@ function hit(x: number, y: number): Drag | { kind: "select"; line: number } | { 
 
 /// `t`, pulled onto the nearest heard word's start (or end, for an end) within reach.
 function snap(t: number, toEnd: boolean, free: boolean) {
-  if (free || !heard.length) return t;
+  if (free) return t;
   let best = t;
   let reach = SNAP / pps;
-  for (const w of heard) {
-    const at = toEnd ? w.end : w.start;
+  const consider = (at: number) => {
     if (Math.abs(at - t) < reach) {
       reach = Math.abs(at - t);
       best = at;
     }
-  }
+  };
+  for (const w of heard) consider(toEnd ? w.end : w.start);
+  // A start also snaps to where the vocals get louder.
+  if (!toEnd) env?.voiceOnsets.forEach(consider);
   return best;
 }
 

@@ -21,6 +21,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as confirm from "./lyric-confirm";
 import * as timeline from "./lyric-timeline";
+import * as sublines from "./lyric-sublines";
 import { publicationFor } from "./lyric-publish";
 import { fillMarked } from "./draft-marks";
 import { sectionLabel, withSections } from "./sections";
@@ -126,6 +127,7 @@ const publishBtn = $<HTMLButtonElement>("lyric-publish");
 const flagBtn = $<HTMLButtonElement>("lyric-flag");
 const doneBtn = $<HTMLButtonElement>("lyric-done");
 const timelineBtn = $<HTMLButtonElement>("lyric-timeline-btn");
+const bpmEl = $("lyric-bpm");
 
 let ctx: EditorContext | null = null;
 let lines: Line[] = [];
@@ -204,6 +206,7 @@ export function begin(context: EditorContext) {
   }
   followTimer = window.setInterval(followPlayhead, 250);
   selected = -1;
+  openSublines();
   if (localStorage.getItem(TIMELINE_KEY) === "open") openTimeline();
 }
 
@@ -228,6 +231,8 @@ export function end() {
   stamping = false;
   window.clearInterval(followTimer);
   timeline.close();
+  sublines.close();
+  bpmEl.hidden = true;
   nowRow = -1;
   lyricsEl.classList.remove("editing", "stamping");
   setEditable(false);
@@ -299,6 +304,7 @@ function render() {
   const keep = lyricsEl === document.activeElement ? modelSelection() : null;
   const top = lyricsEl.scrollTop;
   lyricsEl.replaceChildren(...lines.map(rowFor));
+  sublines.prune();
   lyricsEl.scrollTop = top;
   if (keep && !stamping) setSelection(clampPos(keep.anchor), clampPos(keep.focus));
 }
@@ -334,6 +340,9 @@ function rowFor(line: Line, i: number) {
 
   row.append(time, text, check);
   if (reviewing) row.append(reviewButton(line, i, row));
+  // Its stretch of the song under the words, once the waveform is in (lyric-sublines.ts).
+  const sub = sublines.stripFor(i);
+  if (sub) row.append(sub);
   return row;
 }
 
@@ -368,6 +377,44 @@ function reviewButton(line: Line, i: number, row: HTMLElement) {
   });
   paint();
   return ok;
+}
+
+// ---- the waveform under each line ------------------------------------------------
+// Each timed row carries its stretch of the song's vocals, its words placed on it
+// (lyric-sublines.ts). A word dragged there is retimed: one undo step per drag, and the rows
+// are only rebuilt once it's let go, so the strip being dragged stays put.
+
+function openSublines() {
+  bpmEl.hidden = true;
+  sublines.open({
+    meta: () => ctx!.meta,
+    lines: () => lines,
+    playhead: () => ctx!.playhead(),
+    duration: () => trackDuration(),
+    canSeek: () => !!ctx?.canTransport && !stale,
+    seek: (t) => ctx?.seek(t),
+    begin: () => recordEdit("retime"),
+    changed: (i, done) => {
+      markDirty();
+      if (done) {
+        render();
+        settleHistory();
+        return;
+      }
+      const t = lines[i].t;
+      const time = lyricsEl.querySelector(`.line[data-idx="${i}"] .ln-time`);
+      if (time && t !== null) time.textContent = stampOf(t);
+    },
+    loaded: (bpm, problem) => {
+      if (!editing) return;
+      if (bpm) {
+        bpmEl.textContent = `${Math.round(bpm)} BPM`;
+        bpmEl.hidden = false;
+      }
+      if (problem) setStatus(problem, "err");
+      render();
+    },
+  });
 }
 
 // ---- the timeline -----------------------------------------------------------

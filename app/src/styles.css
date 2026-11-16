@@ -2981,6 +2981,41 @@ input[type="time"]::-webkit-calendar-picker-indicator:hover {
   display: none;
 }
 
+/* ---- the waveform under each line ------------------------------------------------
+   A strip of the song's vocals under a timed line's words, its words placed on it where
+   they start (lyric-sublines.ts draws it). It sits in the words' column, on a row of its
+   own. A timing pass hides it: the pass is tapping, not looking. */
+.ln-sub {
+  grid-column: 2;
+  position: relative;
+  height: 34px;
+  margin: 2px 4px 0;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.ln-sub canvas {
+  display: block;
+}
+.ln-sub-head {
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 2px;
+  height: 21px;
+  background: var(--accent);
+  pointer-events: none;
+}
+#lyrics.stamping .ln-sub {
+  display: none;
+}
+#lyric-bpm {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  margin-right: 4px;
+}
+
 /* ---- the timeline --------------------------------------------------------------
    Under the line list in edit mode: the song's waveform, what the speech engine heard,
    the lines as blocks and the selected line's words (lyric-timeline.ts draws it all). */

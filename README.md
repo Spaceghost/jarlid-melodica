@@ -53,6 +53,13 @@ anywhere in it.
   cut, copy, paste and undo (Ctrl+Z, Ctrl+Y) work as in any text editor. Each line keeps its
   start and word times through edits: a word you didn't touch keeps its time, and lines cut and
   pasted elsewhere move with their timings. Pasted LRC text keeps its timestamps too.
+- **A waveform under every line**: in the editor, each timed line has a strip of the song under
+  its words, covering just that line, with each word placed where it starts. The strip shows
+  the vocal range only (the kick, bass and cymbals filtered out), so the bumps are mostly the
+  singing, and the song's beats are ticked along it; its tempo shows in the editor's bar. Drag a
+  word's tick onto its bump: it snaps to where the vocals get louder, to a word the speech
+  engine heard, or to a beat (hold Alt to move freely). Click anywhere else on it to play from
+  there.
 - **Timeline for timing lyrics**: in the editor, the **Timeline** button shows the song's
   waveform with the lyrics laid on it, and under it the words the speech engine heard. Each
   line is a block: drag its left edge to where it starts and its right edge to where it ends.
