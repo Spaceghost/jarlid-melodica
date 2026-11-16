@@ -39,4 +39,4 @@ Two asks (2026-11-15):
 - [x] UI: index cache + prefetch (3 s after each new track); card thumbs; tokens recorded in history
 - [x] Tests (engine 28, bun 107 + new thumbTarget/memo tests), tsc, cargo check; committed
 - [ ] Try in the running app: thumbs on an older cover (does Pandora take an old track token?),
-      and that Play again appears instantly. Not yet released.
+      and that Play again appears instantly. Released in v1.27.1.
