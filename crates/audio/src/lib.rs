@@ -16,6 +16,8 @@ mod prefetch;
 // Pure DSP with no platform surface, so it is not gated: its tests are what stand between a
 // plausible-looking BPM and a wrong one, and they should run wherever `cargo test` does.
 mod tempo;
+// Beat times over a whole song, from the tempo tracker's onset envelope. Pure arithmetic too.
+pub mod beats;
 // Also ungated: it is arithmetic that runs in the output callback, where a mistake is audible
 // and a sound card is the worst possible place to discover one.
 mod mixer;

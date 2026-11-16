@@ -146,6 +146,10 @@ pub struct TempoTracker {
     since_analysis: usize,
 
     result: Option<Tempo>,
+
+    /// Every envelope sample since the start, when asked for with [`TempoTracker::keep_history`]:
+    /// what a beat tracker over a whole song needs, and more than a live readout should hold.
+    history: Option<Vec<f32>>,
 }
 
 impl TempoTracker {
@@ -180,7 +184,26 @@ impl TempoTracker {
             envelope_origin: 0,
             since_analysis: 0,
             result: None,
+            history: None,
         }
+    }
+
+    /// Keep the whole onset envelope, not just the last [`WINDOW_SECONDS`], for
+    /// [`crate::beats::track`]. For a song decoded in one go; a stream would grow it forever.
+    pub fn keep_history(mut self) -> Self {
+        self.history = Some(Vec::new());
+        self
+    }
+
+    /// The onset envelope since the start (empty unless [`TempoTracker::keep_history`]), one
+    /// value per hop: how sharply energy arrived then, summed over the bands.
+    pub fn history(&self) -> &[f32] {
+        self.history.as_deref().unwrap_or_default()
+    }
+
+    /// Envelope values per second, as it actually worked out from the sample rate.
+    pub fn envelope_rate(&self) -> f64 {
+        self.envelope_rate
     }
 
     /// The best estimate so far, or `None` while the pulse is still unclear.
@@ -278,6 +301,9 @@ impl TempoTracker {
         self.primed = true;
 
         self.envelope.push(flux as f32);
+        if let Some(history) = &mut self.history {
+            history.push(flux as f32);
+        }
         self.since_analysis += 1;
     }
 
