@@ -718,6 +718,14 @@ async fn sidecar(
     Ok(started)
 }
 
+/// One thread for the forced aligner. It runs on every new song, so it is the sidecar's steady
+/// load while music plays, and spreading it wider only adds waste: on a 3-minute song (i7-10710U,
+/// 2026-11-16, `plans/autosync-cpu.md`) 1 thread took 96–98 CPU-s in ~110 s, while 3 took 114 s
+/// on a quiet machine and 186 s on a busy one, ONNX Runtime's pool threads spinning while they
+/// wait on each other. One thread has no pool to spin, holds a single core at most, and still
+/// finishes a song well before the one playing ends.
+pub(crate) const ALIGNER_THREADS: u32 = 1;
+
 /// A quarter of the logical processors, between 1 and 4: enough to stay well ahead of playback
 /// (3 threads ran 3.5x realtime on a 15 W laptop chip) without crowding everything else.
 fn threads() -> u32 {
@@ -1346,7 +1354,7 @@ async fn refine_words(
     let sidecar = sidecar(app, installed, gpu).await?;
     {
         let (s, a) = (sidecar.clone(), aligner.clone());
-        tokio::task::spawn_blocking(move || s.load_aligner(&a, threads()))
+        tokio::task::spawn_blocking(move || s.load_aligner(&a, ALIGNER_THREADS))
             .await
             .map_err(|e| e.to_string())??;
     }

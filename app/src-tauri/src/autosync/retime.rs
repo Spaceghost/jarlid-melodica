@@ -12,8 +12,8 @@ use autosync::retime::{Hinted, How};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use super::{component, decode_16k, file_stem, heard_words, sidecar, threads, work_dir, write_wav};
-use super::{AutoSyncCtl, JobEvent};
+use super::{component, decode_16k, file_stem, heard_words, sidecar, work_dir, write_wav};
+use super::{AutoSyncCtl, JobEvent, ALIGNER_THREADS};
 
 /// One editor line, as it stands.
 #[derive(Deserialize)]
@@ -202,7 +202,7 @@ async fn emit_and_refine(
         let sidecar = sidecar(app, installed, gpu).await?;
         {
             let (s, a) = (sidecar.clone(), aligner.clone());
-            tokio::task::spawn_blocking(move || s.load_aligner(&a, threads()))
+            tokio::task::spawn_blocking(move || s.load_aligner(&a, ALIGNER_THREADS))
                 .await
                 .map_err(|e| e.to_string())??;
         }
