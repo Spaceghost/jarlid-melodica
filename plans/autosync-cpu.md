@@ -65,18 +65,15 @@ when there is nothing to sync and cheaper when there is, with before/after numbe
 - [x] Profile live process: real per-song jobs, ORT compute, no busy loop
 - [x] Offline bench: aligner threads × spinning, hearing GPU on/off
 - [x] Fix: aligner on one thread (`027285f`); clippy and `cargo test autosync` pass
-- [ ] Live after-measurement: needs an app build with `027285f` running (next release)
+- [x] Released in v1.27.2 (`70e9537`, 2026-11-17 12:51 PM PST): setup .exe, .sig, latest.json all up
+- [ ] Live after-measurement once this machine runs 1.27.2
 
 ## Open questions for the user
 
-1. Sharpen word timings only for songs whose lyrics are actually looked at (e.g. while the
-   lyrics pane is open), instead of every new song in the background? That is the only way to
-   get near-idle while music plays. Recommendation: yes, if word timing isn't something you
-   expect pre-made for every song.
-2. Hearing on the iGPU loads its 3D engine to 55–70% for ~70 s a song. Worth an A/B (GPU off
-   for a while) to see whether UI stalls go away? Note GPU off costs ~270 CPU-s per heard song
-   instead, so it's only an experiment.
-3. Release this (app patch)? Not done; releases are your call.
+Answered 2026-11-17: Cameron asked to process only the playing and next songs. That was already
+the behaviour (`native.rs` `TrackStarted` / `NextDownloaded`); my "every new song in the
+background" wording had misled. Given that, he chose no setting, just a patch release of the fix.
+Lyrics-pane gating and the GPU A/B were dropped.
 
 ## Things not to do
 
