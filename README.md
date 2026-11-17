@@ -86,7 +86,9 @@ anywhere in it.
   too: from the record's own word times, or, with auto-sync, from what the speech engine heard.
   **Sharper word timing** *(opt-in, a further ~370 MB)* refines those with a forced aligner
   (Meta's MMS model, CC BY-NC 4.0) that finds each known word in the singing: on the test songs,
-  words starting within 0.1 s of where they're sung go from 56% to 67%.
+  words starting within 0.1 s of where they're sung go from 56% to 67%. It works on the song
+  playing and the next one, on a single CPU thread: about 1.5 CPU-minutes a song, never more
+  than one core.
 - **Song sections**: labels such as `Chorus:`, `[Verse 2: Artist]` or `(Bridge)` in a song's
   lyrics show as quiet section headings over the lines they introduce, never as sung lines.
   Synced lyrics take their headings from the plain lyrics, lined up line by line. Labels are
