@@ -46,7 +46,7 @@ pub const ANDROID: Partner = Partner {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PartnerLogin {
-    partner_id: String,
+    partner_id: AccountId,
     partner_auth_token: String,
     sync_time: String,
 }
@@ -54,8 +54,24 @@ struct PartnerLogin {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UserLogin {
-    user_id: Option<String>,
+    user_id: Option<AccountId>,
     user_auth_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AccountId {
+    Text(String),
+    Number(u64),
+}
+
+impl AccountId {
+    fn into_string(self) -> String {
+        match self {
+            Self::Text(id) => id,
+            Self::Number(id) => id.to_string(),
+        }
+    }
 }
 
 /// An authenticated tuner-API session.
@@ -117,7 +133,7 @@ impl Session {
             .decrypt_sync_time(&login.sync_time)
             .ok_or_else(|| Error::Protocol("could not decrypt syncTime".into()))?;
         session.synced_at = sent_at;
-        session.partner_id = login.partner_id;
+        session.partner_id = login.partner_id.into_string();
         session.partner_auth_token = login.partner_auth_token;
 
         Ok(session)
@@ -150,7 +166,7 @@ impl Session {
             .await?;
 
         let login: UserLogin = serde_json::from_value(result.clone())?;
-        self.user_id = login.user_id;
+        self.user_id = login.user_id.map(AccountId::into_string);
         self.user_auth_token = Some(login.user_auth_token);
         Ok(())
     }
@@ -254,3 +270,25 @@ impl Session {
     }
 }
 
+
+#[cfg(test)]
+mod access_tests {
+    use super::{PartnerLogin, UserLogin};
+    use serde_json::{from_value, json};
+
+    #[test]
+    fn tuner_accepts_numeric_and_string_account_ids() {
+        for id in [json!(42), json!("42")] {
+            let partner: PartnerLogin = from_value(json!({
+                "partnerId": id, "partnerAuthToken": "partner", "syncTime": "0"
+            })).unwrap();
+            let user: UserLogin = from_value(json!({
+                "userId": id, "userAuthToken": "user"
+            })).unwrap();
+            assert_eq!(partner.partner_id.into_string(), "42");
+            assert_eq!(user.user_id.unwrap().into_string(), "42");
+        }
+        let absent: UserLogin = from_value(json!({"userAuthToken": "user"})).unwrap();
+        assert!(absent.user_id.is_none());
+    }
+}
