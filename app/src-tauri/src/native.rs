@@ -548,14 +548,13 @@ async fn attach(
         let app = app.clone();
         let engine = Arc::clone(&engine);
         tauri::async_runtime::spawn(async move {
+            let mut listens = crate::spaceghost::Listens::default();
             loop {
                 tokio::time::sleep(PLAYHEAD_INTERVAL).await;
-                let duration = engine
-                    .now_playing()
-                    .await
-                    .map(|t| t.track_length as f64)
-                    .unwrap_or(0.0);
+                let current = engine.now_playing().await;
+                let duration = current.as_ref().map(|track| track.track_length as f64).unwrap_or(0.0);
                 let position = engine.position().as_secs_f64();
+                listens.tick(current.as_ref(), position, engine.is_paused());
                 let _ = app.emit(
                     "engine://playhead",
                     json!({

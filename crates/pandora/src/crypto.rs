@@ -3,24 +3,45 @@
 //! Requests are JSON, Blowfish-ECB encrypted, then lowercase-hex encoded. Responses that carry
 //! `syncTime` encode it the same way. Verified against pydora's `transport.py` (2026-08-07).
 
-use blowfish::Blowfish;
-use cipher::generic_array::GenericArray;
-use cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+extern "C" {
+    fn melodica_wire_blocks(
+        buffer: *mut u8,
+        length: usize,
+        key: *const u8,
+        key_len: usize,
+        decrypt: i32,
+    ) -> i32;
+}
 
 const BLOCK: usize = 8;
 
 /// A keyed Blowfish-ECB codec. Pandora uses a *pair* of keys per partner: one for encrypting
 /// what we send, a different one for decrypting what we receive.
 pub struct Codec {
-    cipher: Blowfish,
+    key: Vec<u8>,
 }
 
 impl Codec {
     /// Blowfish accepts variable-length keys (4..=56 bytes); every Pandora partner key is in range.
     pub fn new(key: &str) -> Self {
-        let cipher = Blowfish::new_from_slice(key.as_bytes())
-            .expect("Pandora partner keys are always a valid Blowfish key length");
-        Self { cipher }
+        assert!(!key.is_empty() && key.len() <= 56);
+        Self {
+            key: key.as_bytes().to_vec(),
+        }
+    }
+
+    fn transform(&self, buffer: &mut [u8], decrypt: bool) {
+        // Both slices are alive and disjoint for the duration of this non-retaining C call.
+        let ok = unsafe {
+            melodica_wire_blocks(
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                self.key.as_ptr(),
+                self.key.len(),
+                i32::from(decrypt),
+            )
+        };
+        assert_eq!(ok, 1);
     }
 
     /// Encrypt to lowercase hex. Pads with PKCS#7-style bytes to the 8-byte block size — note
@@ -31,10 +52,7 @@ impl Codec {
         buf.extend_from_slice(plaintext);
         buf.extend(std::iter::repeat_n(pad as u8, pad));
 
-        for chunk in buf.chunks_mut(BLOCK) {
-            let block = GenericArray::from_mut_slice(chunk);
-            self.cipher.encrypt_block(block);
-        }
+        self.transform(&mut buf, false);
         hex::encode(buf)
     }
 
@@ -44,10 +62,7 @@ impl Codec {
         let mut buf = hex::decode(hex_text)?;
         // A truncated trailing block can't be decrypted; drop it rather than panicking.
         let usable = buf.len() - (buf.len() % BLOCK);
-        for chunk in buf[..usable].chunks_mut(BLOCK) {
-            let block = GenericArray::from_mut_slice(chunk);
-            self.cipher.decrypt_block(block);
-        }
+        self.transform(&mut buf[..usable], true);
         buf.truncate(usable);
         Ok(buf)
     }
@@ -75,7 +90,13 @@ mod tests {
     #[test]
     fn round_trip() {
         let codec = Codec::new("R=U!LH$O2B#");
-        for input in ["", "a", "12345678", "123456789", "{\"syncTime\":1234567890}"] {
+        for input in [
+            "",
+            "a",
+            "12345678",
+            "123456789",
+            "{\"syncTime\":1234567890}",
+        ] {
             let decrypted = codec.decrypt(&codec.encrypt(input.as_bytes())).unwrap();
             assert!(
                 decrypted.starts_with(input.as_bytes()),

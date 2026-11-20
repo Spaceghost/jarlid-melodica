@@ -1,3 +1,4 @@
+mod spaceghost;
 mod autosync;
 mod build_info;
 mod debug_log;

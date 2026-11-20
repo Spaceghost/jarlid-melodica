@@ -1,3 +1,7 @@
+# Jarlid for Melodica
+
+The native Windows player now uses the Melodica tuner codec. To connect your personal listening history, set the Windows user environment variable MELODICA_SCROBBLE_TOKEN to a client token from https://spacegho.st/scrobble/account/ and restart Jarlid. Clear the variable to disconnect. Only tracks advancing on this device send listens. Network-speaker views retain their own playback owner.
+
 # Jarlid
 
 **Jarlid** (the lid of the jar — in the original myth, Pandora opened a *pithos*) is an

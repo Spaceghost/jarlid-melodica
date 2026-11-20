@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 use crate::crypto::Codec;
 use crate::{Error, Result};
 
-const ENDPOINT: &str = "https://tuner.pandora.com/services/json/";
+const ENDPOINT: &str = "https://spacegho.st/melodica/api/";
 
 /// Credentials identifying a Pandora device client. These are not secrets — they ship inside
 /// every copy of the corresponding official app and have been published for over a decade.
@@ -61,6 +61,7 @@ struct UserLogin {
 /// An authenticated tuner-API session.
 pub struct Session {
     http: reqwest::Client,
+    access: std::sync::RwLock<Option<reqwest::header::HeaderValue>>,
     encrypt: Codec,
     decrypt: Codec,
     partner: &'static Partner,
@@ -81,11 +82,13 @@ impl Session {
     /// it does not involve the user's account at all.
     pub async fn connect(partner: &'static Partner) -> Result<Self> {
         let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .build()?;
 
         let mut session = Self {
             http,
+            access: Default::default(),
             encrypt: Codec::new(partner.encrypt_key),
             decrypt: Codec::new(partner.decrypt_key),
             partner,
@@ -208,15 +211,22 @@ impl Session {
         let mut params: Vec<(&str, &str)> = vec![("method", method)];
         params.extend_from_slice(extra_params);
 
-        let response = self
+        let mut request = self
             .http
             .post(ENDPOINT)
             .query(&params)
             .header("Content-Type", "text/plain")
             .header("User-Agent", self.user_agent())
-            .body(payload)
-            .send()
-            .await?;
+            .body(payload);
+        if method == "auth.userLogin" {
+            *self.access.write().expect("session access") = None;
+        } else if let Some(access) = self.access.read().expect("session access").clone() {
+            request = request.header("x-melodica-access", access);
+        }
+        let response = request.send().await?;
+        if method == "auth.userLogin" && response.status().is_success() {
+            *self.access.write().expect("session access") = response.headers().get("x-melodica-access").cloned();
+        }
 
         let envelope: Map<String, Value> = response.json().await?;
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Jarlid",
+  "productName": "Jarlid for Melodica",
   "version": "1.27.2",
-  "identifier": "com.camer.pandora-desktop",
+  "identifier": "st.spacegho.melodica.jarlid",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -30,7 +30,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCOTcxNjkxNkRGODlGMjkKUldRcG4vaHRrUmFYV3dXRTgvUEZOYkNGMGwwYUZQOXAvOUtsZXJjNFdSaUlVWVdCTUpLczZaVEIK",
       "endpoints": [
-        "https://github.com/cinderblock/jarlid/releases/latest/download/latest.json"
+        "https://github.com/Spaceghost/jarlid-melodica/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "quiet"
@@ -39,7 +39,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",

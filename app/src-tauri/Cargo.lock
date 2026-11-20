@@ -2922,8 +2922,7 @@ dependencies = [
 name = "pandora"
 version = "0.1.0"
 dependencies = [
- "blowfish",
- "cipher",
+ "cc",
  "hex",
  "reqwest 0.12.28",
  "serde",
